@@ -1,0 +1,126 @@
+/*
+ * Qdown viewer-specific styles.
+ *
+ * quiet-light.css is the canonical theme and is never modified. This file only
+ * adds behaviour that the theme does not cover: page overflow, Mermaid sizing,
+ * find highlights, and blocked remote images. It does not re-declare theme
+ * colours except for search/error affordances.
+ */
+
+html {
+  background: #F0F0F7;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  box-sizing: border-box;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+#content {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+
+#content > :first-child {
+  margin-top: 0;
+}
+
+/* Local images and Mermaid diagrams must never force horizontal page scroll. */
+#content img {
+  max-width: 100%;
+  height: auto;
+}
+
+#content .mermaid {
+  margin: 1.2em 0;
+  max-width: 100%;
+  text-align: center;
+  overflow: hidden;
+}
+
+#content .mermaid svg {
+  display: block;
+  max-width: 100% !important;
+  height: auto !important;
+  margin: 0 auto;
+}
+
+#content .mermaid-error {
+  color: #AA3731;
+  background: #F2F2F2;
+  border: 1px solid #C4B7D7;
+  border-radius: 8px;
+  padding: 1em;
+  text-align: left;
+  white-space: pre-wrap;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+/* Task lists: marked emits a checkbox as the first child of the <li>. */
+#content li.task-list-item {
+  list-style: none;
+}
+
+#content ul.contains-task-list {
+  padding-left: 1.25em;
+}
+
+#content li.task-list-item > input[type="checkbox"] {
+  margin: 0 0.45em 0 0;
+  vertical-align: 0.08em;
+}
+
+/* A remote image is rendered as a quiet placeholder, never requested. */
+#content .blocked-image {
+  display: inline-block;
+  color: #777777;
+  background: #EDEDF5;
+  border: 1px dashed #C4B7D7;
+  border-radius: 6px;
+  padding: 0.45em 0.8em;
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+/* Find: CSS Custom Highlight API (modern WebKit) */
+::highlight(qdown-find) {
+  background-color: rgba(112, 86, 151, 0.28);
+  color: inherit;
+}
+
+::highlight(qdown-find-current) {
+  background-color: #7A3E9D;
+  color: #FFFFFF;
+}
+
+/* Find: DOM <mark> fallback for older WebKit */
+#content mark.qdown-find {
+  background-color: rgba(112, 86, 151, 0.28);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+
+#content mark.qdown-find-current {
+  background-color: #7A3E9D;
+  color: #FFFFFF;
+}
+
+.qdown-render-error {
+  color: #AA3731;
+  background: #F2F2F2;
+  border: 1px solid #C4B7D7;
+  border-radius: 8px;
+  padding: 1em;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 1.5em 1.0em 3em;
+  }
+}

@@ -1,0 +1,162 @@
+/*
+ * Quiet Light for Markdown — rendered-document stylesheet
+ * Palette taken verbatim from VS Code's built-in "Quiet Light" theme
+ * (microsoft/vscode: extensions/theme-quietlight/themes/quietlight-color-theme.json,
+ *  fetched 2026-11-16). Layout follows the familiar GitHub-style document flow.
+ *
+ * Deliberate deviations (purple-forward, per Ham's request 2026-11-16):
+ * link color uses the theme's signature purple #705697 (statusBar /
+ * activityBar / peekView border) instead of the token color for markup
+ * links (#4B69C6); headings are purple (#705697 / #7A3E9D) instead of
+ * the markup-heading token (#AA3731); the page background uses the
+ * theme's lavender-tinted #F0F0F7 (welcomePage.tileBackground) instead
+ * of editor #F5F5F5; inline code is purple instead of the raw token
+ * brown (#9C5D27). Swap back any of these for strict fidelity.
+ *
+ * Works as: a Marked 2 custom style, or the stylesheet of a WKWebView /
+ * browser based viewer. Syntax colors target highlight.js class names.
+ */
+
+:root {
+  --ql-bg: #F5F5F5;            /* editor.background */
+  --ql-fg: #333333;            /* default token foreground */
+  --ql-muted: #777777;         /* operators / punctuation */
+  --ql-faint: #AAAAAA;         /* comments */
+  --ql-purple: #7A3E9D;        /* types, variables, classes, quotes */
+  --ql-purple-deep: #705697;   /* signature purple: links, accents */
+  --ql-purple-bright: #9769dc; /* focus / hover accent */
+  --ql-lavender: #EDEDF5;      /* activityBar.background: soft panel */
+  --ql-lavender-line: #C4B7D7; /* titleBar.activeBackground: soft border */
+  --ql-line: #C9D0D9;          /* selection / panel borders */
+  --ql-panel: #F2F2F2;         /* sideBar.background: code blocks */
+  --ql-blue: #4B69C6;          /* keywords, markup links (token color) */
+  --ql-green: #448C27;         /* strings */
+  --ql-brown: #9C5D27;         /* numbers, constants, inline code */
+  --ql-red: #AA3731;           /* functions, markup headings */
+  --ql-red-bright: #cd3131;    /* invalid / errors */
+}
+
+body {
+  background: #F0F0F7; /* welcomePage.tileBackground — lavender-tinted page */
+  color: var(--ql-fg);
+  font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Hiragino Sans",
+    "Noto Sans JP", sans-serif;
+  font-size: 16px;
+  line-height: 1.75;
+  max-width: 46em;
+  margin: 0 auto;
+  padding: 2.5em 1.5em 4em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Headings ---------- */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.6em 0 0.6em;
+}
+h1 { font-size: 1.9em; color: var(--ql-purple-deep); padding-bottom: 0.3em; border-bottom: 2px solid var(--ql-lavender-line); }
+h2 { font-size: 1.55em; color: var(--ql-purple-deep); padding-bottom: 0.25em; border-bottom: 1px solid var(--ql-lavender-line); }
+h3 { font-size: 1.3em; color: var(--ql-purple); }
+h4 { font-size: 1.12em; }
+h5, h6 { font-size: 1em; }
+h6 { color: var(--ql-muted); }
+
+/* ---------- Text ---------- */
+p { margin: 0.7em 0; }
+strong { font-weight: 700; }
+a {
+  color: var(--ql-purple-deep);
+  text-decoration: none;
+}
+a:hover { color: var(--ql-purple-bright); text-decoration: underline; }
+
+hr {
+  border: none;
+  border-top: 2px solid var(--ql-lavender-line);
+  margin: 2em 0;
+}
+
+/* ---------- Lists ---------- */
+ul, ol { padding-left: 1.6em; margin: 0.7em 0; }
+li { margin: 0.25em 0; }
+li::marker { color: var(--ql-purple-deep); }
+input[type="checkbox"] { accent-color: var(--ql-purple-deep); }
+
+/* ---------- Blockquote ---------- */
+blockquote {
+  color: var(--ql-purple);
+  border-left: 4px solid var(--ql-purple-deep);
+  background: var(--ql-lavender);
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  border-radius: 0 6px 6px 0;
+}
+blockquote p { margin: 0.3em 0; }
+
+/* ---------- Code ---------- */
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  color: var(--ql-purple);
+  background: var(--ql-lavender);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+pre {
+  background: var(--ql-panel);
+  border: 1px solid var(--ql-lavender-line);
+  border-radius: 8px;
+  padding: 1em 1.1em;
+  overflow-x: auto;
+  line-height: 1.6;
+  margin: 1em 0;
+}
+pre code {
+  color: var(--ql-fg);
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.9em;
+}
+
+/* ---------- Tables ---------- */
+table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  display: block;
+  overflow-x: auto;
+}
+th, td {
+  border: 1px solid var(--ql-line);
+  padding: 0.45em 0.9em;
+}
+th {
+  background: var(--ql-lavender);
+  color: var(--ql-purple-deep);
+  font-weight: 600;
+  text-align: left;
+}
+tr:nth-child(even) td { background: #FBFBFD; }
+
+/* ---------- Images / misc ---------- */
+img { max-width: 100%; border-radius: 6px; }
+::selection { background: var(--ql-lavender-line); }
+
+/* ---------- Syntax highlighting (highlight.js) ---------- */
+.hljs-comment, .hljs-quote { color: var(--ql-faint); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-doctag { color: var(--ql-blue); }
+.hljs-string, .hljs-regexp, .hljs-meta .hljs-string { color: var(--ql-green); }
+.hljs-number, .hljs-literal { color: var(--ql-brown); }
+.hljs-title, .hljs-title.function_, .hljs-section { color: var(--ql-red); font-weight: bold; }
+.hljs-title.class_, .hljs-type, .hljs-built_in, .hljs-builtin-name { color: var(--ql-purple); font-weight: bold; }
+.hljs-variable, .hljs-template-variable, .hljs-attr, .hljs-variable.language_ { color: var(--ql-purple); }
+.hljs-name, .hljs-tag { color: var(--ql-blue); }
+.hljs-attribute { color: #8190A0; font-style: italic; }
+.hljs-symbol, .hljs-bullet, .hljs-link { color: var(--ql-brown); }
+.hljs-operator, .hljs-punctuation { color: var(--ql-muted); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: bold; }
+.hljs-deletion { color: var(--ql-red-bright); }
+.hljs-addition { color: var(--ql-green); }
+
