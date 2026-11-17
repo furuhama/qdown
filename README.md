@@ -21,7 +21,11 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
   edge. The traffic-light buttons remain, and the blank strip above the sidebar
   header plus the strip beside the page are draggable window regions. Sidebar
   rows and page content start below the titlebar and native tab bar, so nothing
-  is hidden by window chrome.
+  is hidden by window chrome. The sidebar/content split is a small custom pane
+  container rather than `NSSplitViewController`: AppKit treats a split view as
+  a full-height sidebar and insets the native tab bar to the content pane,
+  leaving a blank strip above the sidebar. The custom container keeps the tab
+  bar spanning the entire window while retaining the resizable divider.
 - **Relative links open in a new tab.** A relative Markdown link opens as a new
   tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
@@ -117,16 +121,23 @@ runs the following checks:
   the sidebar top strip exposed as a draggable region
 - Headerless chrome with the native tab bar visible: the safe-area inset grows
   from 28 to 56 points and the WebView/sidebar rows start below the tab bar
+- Real-screen tab-bar geometry (the native tab bar is window-server chrome and
+  is absent from in-process snapshots): the app writes its window number and
+  holds while `screencapture` records the window, then the selected tab's left
+  edge is checked to be at the window edge (not inset by the sidebar) and the
+  sidebar header/content top is checked to be below the tab band
 - Blocking of external images, iframes, `javascript:` links, and raw `<script>`
 - `lipo -info` confirmation of the arm64 + x86_64 slices
 
 Results are written to `build/test-output/` as JSON and PNG snapshots. The
 headerless-chrome screenshots are `05-headerless-window.png` /
 `06-headerless-content.png` (no tabs) and `07-headerless-tabs-window.png` /
-`08-headerless-tabs-content.png` (window with the native tab bar open). The in-process
-snapshots cannot draw AppKit's tab bar itself; the tab-bar geometry is asserted
-instead via `tabBarVisible`, the titlebar height, and the content safe-area
-inset.
+`08-headerless-tabs-content.png` (window with the native tab bar open). The
+in-process snapshots cannot draw AppKit's tab bar itself, so
+`09-real-tabs-window.png` is a real `screencapture` of the tabbed window;
+`Tests/verify_tab_geometry.py` checks the tab strip's width/position and the
+content top from that image, in addition to the `tabBarVisible` / titlebar /
+safe-area assertions on the harness JSON.
 
 ### Verification harness
 
@@ -182,6 +193,9 @@ Common environment variables:
 | `QDOWNTEST_ZOOM_READ_ONLY` | `1` reads the UserDefaults zoom value without modifying it |
 | `QDOWNTEST_LINK` | `1` verifies that a relative link opens a new tab in the same window |
 | `QDOWNTEST_EXPECT_COUNT` | Documents expected from LaunchServices open events (`live-tabs`) |
+| `QDOWNTEST_SCREEN_ONLY` | `1` stops the tabs harness after the initial 2+ tab window is stable (real-screen capture) |
+| `QDOWNTEST_SCREEN_JSON` | JSON output path for the screen-only mode (includes `windowNumber`) |
+| `QDOWNTEST_HOLD_SECONDS` | Keeps the screen-only harness alive for an external `screencapture` |
 
 The legacy `--render-test` / `--smoke-test` forms are also accepted for backward
 compatibility, but should not be used in unattended runs.
@@ -209,6 +223,8 @@ Qdown/
     viewer.html / viewer.css / viewer.js
     vendor/                  # marked, highlight.js, mermaid (no network at runtime)
 Tests/
+  verify_results.py          # JSON/PNG assertions for the harness output
+  verify_tab_geometry.py     # Real-screen tab bar geometry checks
   fixtures/                  # Relative links, images, security checks
 test.md                      # Sample headings, tables, tasks, code, quotes, Mermaid
 ```

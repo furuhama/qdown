@@ -446,6 +446,14 @@ enum RenderTestRunner {
         let urls = paths.map { URL(fileURLWithPath: $0).standardizedFileURL }
 
         Task { @MainActor in
+            // macOS may replay a previous session's restoration/open events.
+            // Those documents are not part of this test and would add tabs
+            // with no rendered sidebar (and make the tab counts unstable).
+            await delay(0.8)
+            closeUnexpectedDocuments(keeping: [])
+            await delay(0.4)
+            closeUnexpectedDocuments(keeping: [])
+
             var documents: [Document] = []
             var host: NSWindow?
 
@@ -521,6 +529,43 @@ enum RenderTestRunner {
                 ])
             }
             opened["perTab"] = perTab
+
+            // Screen-capture helper: stop right after the two-tab window is
+            // stable, write its window number/geometry, and keep the process
+            // alive long enough for an external `screencapture -l` to record
+            // the native tab bar (which is window-server chrome and therefore
+            // absent from the in-process snapshots above).
+            if booleanSetting("QDOWNTEST_SCREEN_ONLY", flag: "--tabs-screen-only", in: arguments) {
+                NSApp.activate(ignoringOtherApps: true)
+                hostWindow.makeKeyAndOrderFront(nil)
+                // Select the leading tab so the real-screen geometry check can
+                // assert that the selected tab starts at the window's left
+                // edge (the old layout inset it by the sidebar width).
+                if let firstWindow = initialWindows.first {
+                    hostWindow.tabGroup?.selectedWindow = firstWindow
+                }
+                await delay(0.5)
+                var screenResult: [String: Any] = [
+                    "mode": "tabs-screen",
+                    "opened": opened,
+                    "windowNumber": hostWindow.windowNumber,
+                    "windowFrame": NSStringFromRect(hostWindow.frame),
+                ]
+                if let screen = hostWindow.screen {
+                    screenResult["screenFrame"] = NSStringFromRect(screen.frame)
+                }
+                if let hostController = hostWindow.windowController as? DocumentWindowController {
+                    screenResult["chrome"] = hostController.debugState()
+                }
+                write(result: screenResult,
+                      to: setting("QDOWNTEST_SCREEN_JSON", flag: "--tabs-screen-json", in: arguments),
+                      label: "QDOWNTABSSCREEN")
+                let hold = Double(ProcessInfo.processInfo.environment["QDOWNTEST_HOLD_SECONDS"] ?? "") ?? 0
+                if hold > 0 {
+                    await delay(hold)
+                }
+                exit(0)
+            }
 
             // Each tab keeps its own scroll position while another tab is shown.
             var scroll: [String: Any] = [:]
@@ -600,6 +645,25 @@ enum RenderTestRunner {
                 detach["documentWindowCountAfterMerge"] = documentWindowCount()
             }
 
+            // Closing tabs back down to a single document must restore the
+            // headerless, tab-bar-hidden layout (safe area 28 instead of 56).
+            var tabClose: [String: Any] = [:]
+            if hostWindow.tabGroup != nil {
+                while let current = hostWindow.tabGroup, current.windows.count > 1 {
+                    current.windows.last?.close()
+                    await delay(0.45)
+                }
+                await delay(1.0)
+                let remaining = NSApp.windows.first {
+                    $0.isVisible && $0.windowController is DocumentWindowController
+                }
+                tabClose["tabCountAfterClose"] = remaining?.tabGroup?.windows.count ?? 1
+                tabClose["tabBarVisibleAfterClose"] = remaining?.tabGroup?.isTabBarVisible ?? false
+                if let controller = remaining?.windowController as? DocumentWindowController {
+                    tabClose["chrome"] = controller.debugState()
+                }
+            }
+
             let result: [String: Any] = [
                 "mode": "tabs",
                 "files": paths,
@@ -608,6 +672,7 @@ enum RenderTestRunner {
                 "scroll": scroll,
                 "localLink": localLink,
                 "detach": detach,
+                "tabClose": tabClose,
                 "menuActions": menuActionSelectors(),
                 "windowTitles": controllers.compactMap { $0.window?.title },
             ]

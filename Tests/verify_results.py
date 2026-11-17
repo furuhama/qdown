@@ -40,6 +40,7 @@ def main():
     smoke_zoom = load_json_with_prefix(out / "smoke-zoom.stdout", "QDOWNSMOKE")
     smoke_link = load_json_with_prefix(out / "smoke-link.stdout", "QDOWNSMOKE")
     tabs = json.loads((out / "tabs.json").read_text())
+    tabs_screen = json.loads((out / "tabs-screen.json").read_text())
     live_tabs = json.loads((out / "live-tabs.json").read_text())
 
     # ---- Markdown rendering -------------------------------------------------
@@ -313,6 +314,19 @@ def main():
     check(all(entry["sidebarHeadings"] > 0 for entry in local_link.get("perTab", [])),
           "tabs.localLink.perTabSidebars", str(local_link.get("perTab")))
 
+    # ---- Real-screen tab bar capture ----------------------------------------
+    check(tabs_screen.get("mode") == "tabs-screen", "tabsScreen.mode",
+          str(tabs_screen.get("mode")))
+    screen_chrome = tabs_screen.get("chrome", {})
+    check(tabs_screen.get("windowNumber", -1) > 0, "tabsScreen.windowNumber",
+          str(tabs_screen.get("windowNumber")))
+    check(screen_chrome.get("tabBarVisible") is True, "tabsScreen.tabBarVisible")
+    check(screen_chrome.get("sidebarWidth", -1) >= 180, "tabsScreen.sidebarWidth",
+          str(screen_chrome.get("sidebarWidth")))
+    check(screen_chrome.get("contentSafeAreaTop", -1) > 28,
+          "tabsScreen.contentBelowTabBar",
+          str(screen_chrome.get("contentSafeAreaTop")))
+
     detach = tabs["detach"]
     check(detach.get("tabCountAfterDetach") == 2, "tabs.detach.tabCount",
           str(detach.get("tabCountAfterDetach")))
@@ -327,6 +341,28 @@ def main():
 
     for selector in ("toggleTabBar:", "moveTabToNewWindow:", "mergeAllWindows:", "selectNextTab:"):
         check(selector in tabs["menuActions"], f"tabs.menu.{selector}")
+
+    # Closing tabs (2 -> 1) must restore the headerless, no-tab-bar layout.
+    tab_close = tabs.get("tabClose", {})
+    close_chrome = tab_close.get("chrome", {})
+    check(tab_close.get("tabCountAfterClose") == 1, "tabs.close.tabCount",
+          str(tab_close.get("tabCountAfterClose")))
+    check(tab_close.get("tabBarVisibleAfterClose") is False,
+          "tabs.close.tabBarHidden",
+          str(tab_close.get("tabBarVisibleAfterClose")))
+    check(close_chrome.get("fullSizeContentView") is True,
+          "tabs.close.fullSizeContentView")
+    check(close_chrome.get("contentSafeAreaTop") == 28,
+          "tabs.close.safeAreaTop", str(close_chrome.get("contentSafeAreaTop")))
+    check(close_chrome.get("titlebarHeight") == 28,
+          "tabs.close.titlebarHeight", str(close_chrome.get("titlebarHeight")))
+    check(close_chrome.get("sidebarHeaderTop", -1) >= 28,
+          "tabs.close.sidebarHeaderTop", str(close_chrome.get("sidebarHeaderTop")))
+    check(close_chrome.get("webViewTop", -1) >= 28,
+          "tabs.close.webViewTop", str(close_chrome.get("webViewTop")))
+    check(close_chrome.get("sidebarDragRegionHeight", -1) == 28,
+          "tabs.close.sidebarDragRegionHeight",
+          str(close_chrome.get("sidebarDragRegionHeight")))
 
     # ---- Real LaunchServices (Finder double-click style) open events --------
     check(live_tabs["documentCount"] == 2, "liveTabs.documentCount",
@@ -375,7 +411,8 @@ def main():
 
     for png in ("01-top.png", "02-mermaid.png", "03-section.png", "04-sidebar.png",
                 "05-headerless-window.png", "06-headerless-content.png",
-                "07-headerless-tabs-window.png", "08-headerless-tabs-content.png"):
+                "07-headerless-tabs-window.png", "08-headerless-tabs-content.png",
+                "09-real-tabs-window.png"):
         path = out / png
         check(path.is_file() and path.stat().st_size > 1000, f"snapshot.{png}")
 

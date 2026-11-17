@@ -10,6 +10,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let qdownDocument: Document
     private let sidebarViewController: SidebarViewController
     private let contentPane: ContentViewController
+    private let splitViewController: DocumentSplitViewController
     private let webView: MarkdownWebView
     private var zoomStore = ZoomStore()
 
@@ -23,8 +24,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let webView = MarkdownWebView(documentDirectory: directory,
                                       resourceDirectory: Bundle.main.resourceURL ?? directory)
         self.webView = webView
-        self.sidebarViewController = SidebarViewController()
-        self.contentPane = ContentViewController(webView: webView)
+        let sidebarViewController = SidebarViewController()
+        let contentPane = ContentViewController(webView: webView)
+        self.sidebarViewController = sidebarViewController
+        self.contentPane = contentPane
+        self.splitViewController = DocumentSplitViewController(
+            sidebarViewController: sidebarViewController,
+            contentViewController: contentPane
+        )
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 780),
@@ -51,23 +58,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         window.delegate = self
 
-        let splitViewController = NSSplitViewController()
-        let sidebarItem = NSSplitViewItem(viewController: sidebarViewController)
-        sidebarItem.canCollapse = false
-        sidebarItem.minimumThickness = 180
-        sidebarItem.maximumThickness = 420
-        sidebarItem.holdingPriority = NSLayoutConstraint.Priority(260)
-
-        let contentItem = NSSplitViewItem(viewController: contentPane)
-        contentItem.canCollapse = false
-        contentItem.minimumThickness = 320
-
-        splitViewController.addSplitViewItem(sidebarItem)
-        splitViewController.addSplitViewItem(contentItem)
-        splitViewController.splitView.isVertical = true
-        splitViewController.splitView.dividerStyle = .thin
-        splitViewController.splitView.autosaveName = "QdownSplitView"
-
+        // A plain two-pane container is used instead of NSSplitViewController
+        // on purpose. AppKit treats any NSSplitView as a full-height sidebar
+        // and lays the native window tab bar out only over the content pane,
+        // which leaves a blank strip above the sidebar. A custom pane
+        // container keeps the native tab bar spanning the whole window.
         window.contentViewController = splitViewController
 
         if !window.setFrameUsingName("QdownDocumentWindow") {
@@ -315,6 +310,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             "titlebarHeight": window.map { $0.frame.height - $0.contentLayoutRect.height } ?? 0,
             "contentSafeAreaTop": window?.contentView?.safeAreaInsets.top ?? 0,
             "sidebarSafeAreaTop": sidebarViewController.view.safeAreaInsets.top,
+            "sidebarWidth": splitViewController.sidebarWidth,
             "sidebarDragRegionHeight": sidebarViewController.dragRegionHeight,
             "sidebarDragHandlesAcceptMouse": sidebarViewController.dragHandlesAcceptMouse,
             "contentDragRegionAcceptsMouse": contentPane.dragRegionAcceptsMouse,
@@ -323,6 +319,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             "webViewTop": contentPane.webViewTopInWindow,
             "findBarTop": contentPane.findBarTopInWindow,
             "tabBarVisible": window?.tabGroup?.isTabBarVisible ?? false,
+            "windowNumber": window?.windowNumber ?? -1,
             "titlebarSeparatorStyle": window.map { Int($0.titlebarSeparatorStyle.rawValue) } ?? -1,
         ]
         if let window {
@@ -335,5 +332,188 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         webView.clearFind()
+    }
+}
+
+// MARK: - Pane container
+
+/// Two-pane (sidebar + document) container.
+///
+/// This deliberately does not use `NSSplitViewController`/`NSSplitView`.
+/// AppKit treats any split view as a full-height sidebar and then lays the
+/// native window tab bar out only over the content pane, leaving the strip
+/// above the sidebar blank. A plain pane container keeps the native tab bar
+/// spanning the entire window while preserving the sidebar/content split and
+/// the headerless window chrome.
+final class DocumentSplitViewController: NSViewController {
+
+    private let sidebarViewController: SidebarViewController
+    private let contentViewController: ContentViewController
+    private let splitView: DocumentSplitView
+
+    init(sidebarViewController: SidebarViewController,
+         contentViewController: ContentViewController) {
+        self.sidebarViewController = sidebarViewController
+        self.contentViewController = contentViewController
+        self.splitView = DocumentSplitView(sidebarView: sidebarViewController.view,
+                                           contentView: contentViewController.view)
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        view = splitView
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        addChild(sidebarViewController)
+        addChild(contentViewController)
+    }
+
+    var sidebarWidth: CGFloat { splitView.sidebarWidth }
+}
+
+/// The actual split layout: a fixed-width sidebar, a 1pt separator with a
+/// wider hit area, and a flexible content pane.
+final class DocumentSplitView: NSView {
+
+    static let minimumSidebarWidth: CGFloat = 180
+    static let maximumSidebarWidth: CGFloat = 420
+    static let minimumContentWidth: CGFloat = 320
+    static let dividerHitWidth: CGFloat = 5
+
+    private(set) var sidebarWidth: CGFloat
+    private let widthConstraint: NSLayoutConstraint
+    private let dividerView = SplitDividerView()
+
+    init(sidebarView: NSView, contentView: NSView) {
+        let storedWidth = min(max(Self.storedSidebarWidth(),
+                                  Self.minimumSidebarWidth),
+                              Self.maximumSidebarWidth)
+        self.sidebarWidth = storedWidth
+        self.widthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: storedWidth)
+        super.init(frame: .zero)
+
+        sidebarView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        dividerView.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(sidebarView)
+        addSubview(dividerView)
+        addSubview(contentView)
+
+        NSLayoutConstraint.activate([
+            sidebarView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            sidebarView.topAnchor.constraint(equalTo: topAnchor),
+            sidebarView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthConstraint,
+
+            dividerView.leadingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
+            dividerView.topAnchor.constraint(equalTo: topAnchor),
+            dividerView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            dividerView.widthAnchor.constraint(equalToConstant: Self.dividerHitWidth),
+
+            contentView.leadingAnchor.constraint(equalTo: dividerView.trailingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentView.topAnchor.constraint(equalTo: topAnchor),
+            contentView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            contentView.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumContentWidth),
+        ])
+
+        dividerView.onDrag = { [weak self] delta in
+            guard let self else { return }
+            self.setSidebarWidth(self.sidebarWidth + delta)
+        }
+        dividerView.onDragEnded = { [weak self] in
+            guard let self else { return }
+            UserDefaults.standard.set(Double(self.sidebarWidth), forKey: "QdownSidebarWidth")
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        // Keep the sidebar inside its bounds when the window is made narrow.
+        guard bounds.width > 0 else { return }
+        let maximum = maximumSidebarWidth
+        if widthConstraint.constant > maximum + 0.5 {
+            widthConstraint.constant = maximum
+            sidebarWidth = maximum
+        }
+    }
+
+    private var maximumSidebarWidth: CGFloat {
+        max(Self.minimumSidebarWidth,
+            min(Self.maximumSidebarWidth,
+                bounds.width - Self.minimumContentWidth - Self.dividerHitWidth))
+    }
+
+    private func setSidebarWidth(_ width: CGFloat) {
+        let clamped = min(max(width, Self.minimumSidebarWidth), maximumSidebarWidth)
+        sidebarWidth = clamped
+        widthConstraint.constant = clamped
+    }
+
+    /// Continues the width chosen with the old NSSplitView autosave. The
+    /// previous stored value is a frame string such as
+    /// `"0.000000, 0.000000, 230.000000, 808.000000, NO, NO"`.
+    private static func storedSidebarWidth() -> CGFloat {
+        let defaults = UserDefaults.standard
+        if let width = defaults.object(forKey: "QdownSidebarWidth") as? NSNumber {
+            return CGFloat(width.doubleValue)
+        }
+        if let frames = defaults.stringArray(forKey: "NSSplitView Subview Frames QdownSplitView"),
+           let first = frames.first {
+            let parts = first.split(separator: ",").map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            if parts.count >= 3, let width = Double(parts[2]) {
+                return CGFloat(width)
+            }
+        }
+        return 230
+    }
+}
+
+/// A transparent 5pt hit area with a 1pt separator line, used to resize the
+/// sidebar without bringing back `NSSplitView`.
+final class SplitDividerView: NSView {
+
+    var onDrag: ((CGFloat) -> Void)?
+    var onDragEnded: (() -> Void)?
+
+    private var lastX: CGFloat = 0
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setFill()
+        NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height).fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        lastX = convert(event.locationInWindow, from: nil).x
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let x = convert(event.locationInWindow, from: nil).x
+        let delta = x - lastX
+        lastX = x
+        onDrag?(delta)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        onDragEnded?()
     }
 }

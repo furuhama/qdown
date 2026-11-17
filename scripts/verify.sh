@@ -39,11 +39,12 @@ rm -f "$OUT"/render.json "$OUT"/render-fallback.json "$OUT"/security.json \
       "$OUT"/smoke-zoom.stdout "$OUT"/smoke-zoom.stderr \
       "$OUT"/smoke-link.stdout "$OUT"/smoke-link.stderr \
       "$OUT"/smoke-tabs.stdout "$OUT"/smoke-tabs.stderr "$OUT"/tabs.json \
+      "$OUT"/tabs-screen.json "$OUT"/tabs-screen.stdout "$OUT"/tabs-screen.stderr \
       "$OUT"/smoke-live-tabs.stdout "$OUT"/smoke-live-tabs.stderr "$OUT"/live-tabs.json \
       "$OUT"/01-top.png "$OUT"/02-mermaid.png "$OUT"/03-section.png \
       "$OUT"/04-sidebar.png "$OUT"/05-headerless-window.png \
       "$OUT"/06-headerless-content.png "$OUT"/07-headerless-tabs-window.png \
-      "$OUT"/08-headerless-tabs-content.png
+      "$OUT"/08-headerless-tabs-content.png "$OUT"/09-real-tabs-window.png
 
 kill_qdown() {
   pkill -x Qdown 2>/dev/null || true
@@ -129,6 +130,59 @@ run_qdown smoke-tabs \
   QDOWNTEST_WINDOW_SNAPSHOT=build/test-output/07-headerless-tabs-window.png \
   QDOWNTEST_CONTENT_SNAPSHOT=build/test-output/08-headerless-tabs-content.png
 
+# The native window tab bar is drawn by the window server, so it is absent
+# from the in-process snapshots above. The tabs harness writes the window
+# number and keeps the app alive while we record the window with the system
+# screencapture tool; Tests/verify_tab_geometry.py then checks the tab strip
+# starts at the window's left edge and that content starts below it.
+echo "==> tabs real-screen geometry (screencapture)"
+kill_qdown
+rm -f "$OUT"/tabs-screen.json "$OUT"/tabs-screen.stdout "$OUT"/tabs-screen.stderr \
+      "$OUT"/09-real-tabs-window.png
+timeout --signal=TERM --kill-after=5 "$TIMEOUT_SECS" env \
+  QDOWNTEST_MODE=tabs \
+  QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md\nTests/fixtures/security.md' \
+  QDOWNTEST_SCREEN_ONLY=1 \
+  QDOWNTEST_SCREEN_JSON="$OUT/tabs-screen.json" \
+  QDOWNTEST_HOLD_SECONDS=20 \
+  "$QS" > "$OUT/tabs-screen.stdout" 2> "$OUT/tabs-screen.stderr" &
+screen_pid=$!
+for _ in $(seq 1 80); do
+  [ -s "$OUT/tabs-screen.json" ] && break
+  sleep 0.25
+done
+if [ ! -s "$OUT/tabs-screen.json" ]; then
+  echo "error: tabs screen harness did not write its JSON" >&2
+  tail -20 "$OUT/tabs-screen.stderr" >&2 || true
+  kill "$screen_pid" 2>/dev/null || true
+  wait "$screen_pid" 2>/dev/null || true
+  kill_qdown
+  exit 1
+fi
+window_id="$(python3 - "$OUT/tabs-screen.json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+print(data.get("windowNumber") or data.get("chrome", {}).get("windowNumber") or "")
+PY
+)"
+if [ -z "$window_id" ]; then
+  echo "error: tabs-screen.json has no windowNumber" >&2
+  kill "$screen_pid" 2>/dev/null || true
+  wait "$screen_pid" 2>/dev/null || true
+  kill_qdown
+  exit 1
+fi
+capture_status=0
+/usr/sbin/screencapture -x -o -l "$window_id" "$OUT/09-real-tabs-window.png" || capture_status=$?
+kill_qdown
+wait "$screen_pid" 2>/dev/null || true
+if [ "$capture_status" -ne 0 ] || [ ! -s "$OUT/09-real-tabs-window.png" ]; then
+  echo "error: screencapture failed for window $window_id (status $capture_status)" >&2
+  exit 1
+fi
+echo "    captured window $window_id -> 09-real-tabs-window.png"
+
 # Real LaunchServices/Mac Finder path: the app is started directly so it can
 # read its test environment, then `open -a` delivers ordinary `odoc` open
 # events, which NSDocumentController handles itself. No option-style argv is
@@ -158,6 +212,9 @@ if [ "$status" -ne 0 ]; then
   tail -20 "$OUT/smoke-live-tabs.stderr" >&2 || true
   exit "$status"
 fi
+
+echo "==> Checking tab bar geometry"
+python3 "$ROOT/Tests/verify_tab_geometry.py" "$OUT/09-real-tabs-window.png" "$OUT/tabs-screen.json"
 
 echo "==> Checking results"
 python3 "$ROOT/Tests/verify_results.py" "$OUT"
