@@ -1,28 +1,43 @@
 # Qdown
 
-Quiet Light テーマ専用の、無料・窓型 macOS Markdown ビューア。Swift + AppKit の
-ドキュメントベースアプリで、本文は WKWebView に描画します。テーマ切替はなく、
-`Qdown/Resources/quiet-light.css` をそのまま適用します。
+A document-based macOS Markdown viewer written in Swift and AppKit that renders content in WKWebView.
 
-## 動作環境
+## Features
 
-- macOS 13.0 以降
-- Xcode（検証時: Xcode 26.3 / macOS 15.7.9 / Intel Mac）
-- ユニバーサルバイナリ（arm64 + x86_64）
+- **Fixed Quiet Light theme.** Qdown applies `Qdown/Resources/quiet-light.css` as
+  its only theme. There is no theme switching and no color re-derivation.
+- **Heading sidebar.** Every heading from h1 through h6 is listed in the left
+  sidebar; clicking one scrolls the document to that heading.
+- **Find in page.** Search with ⌘F, move between matches with ⌘G and ⇧⌘G, and
+  close the find bar with Esc.
+- **Persistent zoom.** Zoom the document with ⌘+ and ⌘−, or reset to actual size
+  with ⌘0. The zoom level is stored in `UserDefaults`.
+- **Relative links open in a new window.** A relative Markdown link opens in a
+  new Qdown window; http(s) links open in the default browser.
+- **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
+  the app, so rendering requires no network access.
+- **Themed Mermaid diagrams.** Mermaid diagrams are rendered with the Quiet
+  Light palette.
 
-## ビルド
+## Requirements
+
+- macOS 13.0 or later
+- Xcode, to build from source
+- Universal binary (arm64 + x86_64)
+
+## Build
 
 ```sh
 ./scripts/build.sh
 ```
 
-生成物:
+The build output is:
 
 ```
 build/Release/Qdown.app
 ```
 
-`xcodebuild` を直接使う場合:
+To invoke `xcodebuild` directly:
 
 ```sh
 xcodebuild -project Qdown.xcodeproj -scheme Qdown -configuration Release \
@@ -30,108 +45,65 @@ xcodebuild -project Qdown.xcodeproj -scheme Qdown -configuration Release \
   ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build
 ```
 
-## 検証
+## Usage
+
+Open `.md`, `.markdown`, or `.txt` files by double-clicking them in Finder,
+using Open With, dragging them onto Qdown, or choosing File > Open….
+
+| Action | Shortcut |
+| --- | --- |
+| Find in page | ⌘F |
+| Next match | ⌘G |
+| Previous match | ⇧⌘G |
+| Close the find bar | Esc |
+| Zoom in / out | ⌘+ / ⌘− |
+| Actual size | ⌘0 |
+
+Click a heading in the left sidebar to scroll to it. Relative Markdown links
+open in a new Qdown window, while http(s) links open in your default browser.
+
+The application menu also provides **Set Qdown as Default Markdown Viewer…**,
+which registers Qdown as the default application for `.md` files. Running it
+changes the system's default application setting.
+
+## Development
+
+### Automated verification
 
 ```sh
 ./scripts/verify.sh
 ```
 
-`build/Release/Qdown.app` をビルド済みの前提です。次の自動検証を行います。
+This expects `build/Release/Qdown.app` to have been built already. The script
+runs the following checks:
 
-- 実際の WKWebView / scheme handler / viewer.html / CSS / JS を使った描画テスト
-- 見出し・表・タスクリスト・コードブロック・引用・画像・Mermaid の DOM 検証
-- Quiet Light の計算済み色（背景 `#F0F0F7`、見出し `#705697`、Mermaid の
-  `#EDEDF5` / `#705697` / `#333333`）の検証
-- CSS Custom Highlight API と `<mark>` フォールバックの両方の検索検証
-- 狭い窓（520px / 380px）と広い窓（1400px）での横スクロール・Mermaid はみ出し検証
-- ネイティブウィンドウのスモークテスト（複数窓、サイドバー、検索件数、
-  ズーム保存、サイドバークリック、相対 Markdown リンク）
-- 外部画像・iframe・javascript: リンク・生 `<script>` の無効化検証
-- `lipo -info` による arm64 + x86_64 の確認
+- Rendering through the real WKWebView, scheme handler, `viewer.html`, CSS, and
+  JavaScript
+- DOM checks for headings, tables, task lists, code blocks, blockquotes, images,
+  and Mermaid
+- Quiet Light computed colors (background `#F0F0F7`, headings `#705697`, and
+  Mermaid `#EDEDF5` / `#705697` / `#333333`)
+- Search using both the CSS Custom Highlight API and the `<mark>` fallback
+- Horizontal scrolling and Mermaid overflow at narrow widths (520px and 380px)
+  and at a wide width (1400px)
+- Native window smoke tests: multiple windows, sidebar, match count, zoom
+  persistence, sidebar clicks, and relative Markdown links
+- Blocking of external images, iframes, `javascript:` links, and raw `<script>`
+- `lipo -info` confirmation of the arm64 + x86_64 slices
 
-結果は `build/test-output/` に JSON と PNG スナップショットで残ります。
+Results are written to `build/test-output/` as JSON and PNG snapshots.
 
-## 主な操作
+### Verification harness
 
-- `.md` / `.markdown` / `.txt` を Finder のダブルクリック、Open With、ドラッグ＆
-  ドロップ、File > Open… で開く
-- 左サイドバーの見出し（h1–h6）をクリックすると本文へスクロール
-- ⌘F 検索、⌘G / ⇧⌘G で前後のマッチ、Esc で検索バーを閉じる
-- ⌘+ / ⌘− で本文をズーム、⌘0 で等倍。倍率は `UserDefaults` に保存
-- 相対パスの Markdown リンクは新しい Qdown の窓で開く。http(s) は既定のブラウザ
-- アプリメニューの「Set Qdown as Default Markdown Viewer…」で `.md` の既定アプリに
-  登録（実行するとシステムの既定アプリ設定が変わります）
-
-## 構成
-
-```
-Qdown/
-  Info.plist                 # ドキュメントタイプ、UTI、アプリ情報
-  Sources/
-    main.swift               # NSApplication 起動（storyboard なし）
-    AppDelegate.swift        # メニュー、ファイルオープン、既定アプリ登録
-    Document.swift           # NSDocument、文字コード判定
-    DocumentWindowController.swift
-    MarkdownWebView.swift    # WKWebView、JS ブリッジ、ドラッグ＆ドロップ
-    LocalSchemeHandler.swift # qdown://app と qdown://doc、ネットワーク遮断
-    SidebarViewController.swift
-    FindBarView.swift        # 検索バーと本文ビュー
-    LinkRouter.swift
-    ZoomStore.swift
-    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke（検証用）
-  Resources/
-    quiet-light.css          # 正本。改変しない
-    viewer.html / viewer.css / viewer.js
-    vendor/                  # marked, highlight.js, mermaid（実行時ネットワークなし）
-Tests/
-  fixtures/                  # 相対リンク・画像・セキュリティ確認用
-test.md                      # 見出し・表・タスク・コード・引用・Mermaid のサンプル
-```
-
-## テーマ CSS
-
-`Qdown/Resources/quiet-light.css` はタスクシート添付の CSS とバイト単位で同一です。
-
-```
-SHA-256: 5e33b8e7a578e0b5f93467ff7882c4314d1fcad9d3863ea0656151f0300477b6
-```
-
-テーマ色の再導出はせず、CSS をそのまま読み込みます。`viewer.css` は検索ハイライト、
-Mermaid の縮小、画像のはみ出し防止など、テーマがカバーしない挙動だけを追加します。
-
-## Vendoring
-
-`scripts/vendor.sh` で取得します（ビルド時のみネットワーク使用）。
-
-| ライブラリ | バージョン | ライセンス |
-| --- | --- | --- |
-| marked | 12.0.2 | MIT |
-| highlight.js (@highlightjs/cdn-assets) | 11.11.1 | BSD-3-Clause |
-| mermaid | 10.9.5 | MIT |
-
-ライセンス全文は `Qdown/Resources/vendor/` に同梱しています。
-
-## 実行時ネットワーク
-
-- ページは `qdown://app`（アプリ資産）と `qdown://doc`（文書ディレクトリ内の画像のみ）
-  の専用 scheme だけで読み込みます
-- CSP で `default-src 'none'`、`connect-src 'none'`、`img-src qdown: data:` とし、
-  http(s) の script/style/img/frame を拒否します
-- `WKContentRuleList` でも http(s)/ws(s)/ftp をブロックします
-- `WKWebsiteDataStore.nonPersistent()` を使用します
-- Markdown 内の外部画像は CSP でブロックされたうえで、DOM から `src` を除去して
-  プレースホルダ表示にします
-
-## 検証ハーネス
-
-アプリのバイナリは**引数なし**で起動し、検証用の設定はすべて環境変数
-（`QDOWNTEST_*`）で渡します。macOS の `NSDocumentController` は argv の
-ファイル風引数を「開くべき書類」と解釈するため、無人検証で引数を渡すと
-モーダルダイアログ待ちで停止することがあります。`scripts/verify.sh` は
-全起動を `timeout` で包み、前後で `pkill -x Qdown` による掃除も行います。
+The app binary is always launched **without arguments**, and test settings are
+passed through `QDOWNTEST_*` environment variables. macOS's
+`NSDocumentController` treats file-like argv entries as documents to open, so
+passing arguments in an unattended run can leave the app waiting on a modal
+dialog. `scripts/verify.sh` wraps every launch in `timeout` and cleans up with
+`pkill -x Qdown` before and after each run.
 
 ```sh
-# 描画テスト（実 WKWebView / 実 scheme handler）
+# Rendering test (real WKWebView / real scheme handler)
 QDOWNTEST_MODE=render \
 QDOWNTEST_MARKDOWN=test.md \
 QDOWNTEST_JSON=build/test-output/render.json \
@@ -141,39 +113,90 @@ QDOWNTEST_SNAPSHOT_SECTION=build/test-output/section.png \
 QDOWNTEST_FIND=Mermaid \
   build/Release/Qdown.app/Contents/MacOS/Qdown
 
-# ネイティブウィンドウのスモークテスト
+# Native window smoke test
 QDOWNTEST_MODE=smoke \
 QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md' \
   build/Release/Qdown.app/Contents/MacOS/Qdown
 ```
 
-主な環境変数:
+Common environment variables:
 
-| 変数 | 用途 |
+| Variable | Purpose |
 | --- | --- |
-| `QDOWNTEST_MODE` | `render` または `smoke` |
-| `QDOWNTEST_MARKDOWN` | 描画する Markdown |
-| `QDOWNTEST_JSON` | 結果 JSON の出力先 |
-| `QDOWNTEST_SNAPSHOT` / `_DIAGRAM` / `_SECTION` | PNG スナップショット出力先 |
-| `QDOWNTEST_FIND` / `QDOWNTEST_FALLBACK` | 検索語 / `<mark>` フォールバック |
-| `QDOWNTEST_FILES` | スモークテストで開くファイル（改行区切り） |
-| `QDOWNTEST_SIDEBAR_SNAPSHOT` | サイドバー PNG の出力先 |
-| `QDOWNTEST_ZOOM_READ_ONLY` | `1` で UserDefaults のズーム値を書き換えずに読み取り検証 |
-| `QDOWNTEST_LINK` | `1` で相対リンクの新規窓オープンを検証 |
+| `QDOWNTEST_MODE` | `render` or `smoke` |
+| `QDOWNTEST_MARKDOWN` | Markdown file to render |
+| `QDOWNTEST_JSON` | Output path for the result JSON |
+| `QDOWNTEST_SNAPSHOT` / `_DIAGRAM` / `_SECTION` | PNG snapshot output paths |
+| `QDOWNTEST_FIND` / `QDOWNTEST_FALLBACK` | Search term / `<mark>` fallback |
+| `QDOWNTEST_FILES` | Files to open in the smoke test (newline-separated) |
+| `QDOWNTEST_SIDEBAR_SNAPSHOT` | Output path for the sidebar PNG |
+| `QDOWNTEST_ZOOM_READ_ONLY` | `1` reads the UserDefaults zoom value without modifying it |
+| `QDOWNTEST_LINK` | `1` verifies that a relative link opens a new window |
 
-後方互換のため `--render-test` / `--smoke-test` 形式も受け付けますが、
-無人実行では使用しないでください。
+The legacy `--render-test` / `--smoke-test` forms are also accepted for backward
+compatibility, but should not be used in unattended runs.
 
-## 既知の未確認・制約
+## Project structure
 
-- 人手による GUI 操作確認は行っていません。自動スナップショットと DOM メトリクスで
-  確認した範囲は `report.md` を参照してください。
-- Intel Mac 上でビルド・実行を確認しました。arm64 スライスは `lipo` で確認していますが、
-  Apple Silicon 実機での起動は未確認です。
-- 「Set Qdown as Default Markdown Viewer…」は実装済みですが、検証では実行していません
-  （システムの既定アプリ設定を変更しないため）。
-- ドラッグ＆ドロップは `WKWebView` の `NSDraggingDestination` で実装していますが、
-  自動操作での検証はしていません。
-- 相対 Markdown リンクで既に開いている文書を指した場合は、NSDocumentController の
-  挙動により既存の窓を再利用することがあります。
-- ファイル変更のライブリロード、編集、印刷/PDF、Quick Look などは対象外です。
+```
+Qdown/
+  Info.plist                 # Document types, UTIs, app metadata
+  Sources/
+    main.swift               # NSApplication startup (no storyboard)
+    AppDelegate.swift        # Menus, file opening, default-app registration
+    Document.swift           # NSDocument, text encoding detection
+    DocumentWindowController.swift
+    MarkdownWebView.swift    # WKWebView, JS bridge, drag and drop
+    LocalSchemeHandler.swift # qdown://app and qdown://doc, network blocking
+    SidebarViewController.swift
+    FindBarView.swift        # Find bar and content view
+    LinkRouter.swift
+    ZoomStore.swift
+    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke (verification)
+  Resources/
+    quiet-light.css          # Canonical theme; not modified
+    viewer.html / viewer.css / viewer.js
+    vendor/                  # marked, highlight.js, mermaid (no network at runtime)
+Tests/
+  fixtures/                  # Relative links, images, security checks
+test.md                      # Sample headings, tables, tasks, code, quotes, Mermaid
+```
+
+## Theme
+
+`Qdown/Resources/quiet-light.css` is the canonical theme and is loaded as-is;
+the viewer does not re-derive its colors. `viewer.css` adds only behavior the
+theme does not cover, such as search highlighting, Mermaid scaling, and
+preventing images from overflowing the page.
+
+## Vendored libraries
+
+Dependencies are fetched with `scripts/vendor.sh` (network access is used only
+at build time).
+
+| Library | Version | License |
+| --- | --- | --- |
+| marked | 12.0.2 | MIT |
+| highlight.js (@highlightjs/cdn-assets) | 11.11.1 | BSD-3-Clause |
+| mermaid | 10.9.5 | MIT |
+
+Full license texts are included under `Qdown/Resources/vendor/`.
+
+## Runtime network access
+
+- Pages load only through two custom schemes: `qdown://app` for application
+  assets and `qdown://doc` for images inside the document's directory.
+- The Content Security Policy sets `default-src 'none'`, `connect-src 'none'`,
+  and `img-src qdown: data:`, rejecting http(s) scripts, styles, images, and
+  frames.
+- A `WKContentRuleList` additionally blocks http(s), ws(s), and ftp.
+- The app uses `WKWebsiteDataStore.nonPersistent()`.
+- External images in Markdown are blocked by the CSP, their `src` is removed
+  from the DOM, and a placeholder is shown instead.
+
+## Limitations
+
+- Qdown is a viewer. It does not reload files when they change on disk, edit
+  documents, print or export PDFs, or preview documents in Quick Look.
+- A relative Markdown link that points to a document already open may reuse the
+  existing window, depending on `NSDocumentController` behavior.
