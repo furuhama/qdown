@@ -6,28 +6,28 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
 
 - **Fixed Quiet Light theme.** Qdown applies `Qdown/Resources/quiet-light.css` as
   its only theme. There is no theme switching and no color re-derivation.
-- **Heading sidebar.** Every heading from h1 through h6 is listed in the left
-  sidebar; clicking one scrolls the document to that heading.
+- **Floating outline.** Every heading from h1 through h6 appears as a short
+  bar along the right edge of the text column, and the bar for the section you
+  are reading is highlighted. Hover the bars to open a hierarchical list;
+  clicking a bar or an entry smooth-scrolls to that heading. The outline is a
+  page overlay: it never reflows the document, is not part of ⌘F results, is
+  excluded from ⌘A, and keeps a constant on-screen size at every zoom level.
 - **Find in page.** Search with ⌘F, move between matches with ⌘G and ⇧⌘G, and
   close the find bar with Esc.
 - **Persistent zoom.** Zoom the document with ⌘+ and ⌘−, or reset to actual size
   with ⌘0. The zoom level is stored in `UserDefaults`.
-- **Window tabs with a sidebar-priority layout.** Open several Markdown files
-  as tabs in one window. Qdown keeps macOS `NSWindow` tab groups (so detach,
-  merge, ⌃Tab, and LaunchServices opens still work), but draws its own
-  single-row tab strip instead of using AppKit's titlebar tab bar. The sidebar
-  is the outermost, full-height split element with the traffic lights on top;
-  the tab strip lives only in the document column, starts exactly at the split
-  position and at the window's top edge, and the page starts below it. Each tab
-  keeps its own document, heading sidebar, find state, zoom, and scroll
-  position.
+- **Native window tabs.** Open several Markdown files as tabs in one window
+  using AppKit's standard `NSWindow` tab bar. Detach, merge, ⌃Tab, Close Tab,
+  the Window menu, and LaunchServices opens all use the system behaviour, and
+  the tab bar is the only element that splits the window. Each tab keeps its
+  own document, outline, find state, zoom, and scroll position.
 - **Headerless window.** The titlebar is transparent (`fullSizeContentView` +
-  `titlebarAppearsTransparent`) and the title is hidden. The filename is shown
-  by Qdown's tab strip. With a single document the strip is hidden entirely,
-  so the sidebar/page background still reaches the window's top edge exactly as
-  before; the traffic lights remain over the sidebar and the blank strip above
-  the sidebar header is a draggable window region. The sidebar/content split is
-  a small custom pane container rather than `NSSplitViewController`.
+  `titlebarAppearsTransparent`) and the title is hidden. When tabs are shown
+  AppKit's native tab bar occupies the titlebar row and the page starts below
+  its safe area. With a single document the tab bar is hidden automatically,
+  the filename still appears in the native tab, and only the 28-point
+  traffic-light strip remains above the page; that strip is a draggable window
+  region and the page background reaches the window's top edge.
 - **Relative links open in a new tab.** A relative Markdown link opens as a new
   tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
@@ -80,8 +80,9 @@ to New Window) to detach it.
 | Zoom in / out | ⌘+ / ⌘− |
 | Actual size | ⌘0 |
 
-Click a heading in the left sidebar to scroll to it. Relative Markdown links
-open in a new tab in the same window, while http(s) links open in your default
+Move the pointer to the right edge of the text column to open the outline, then
+click a bar or an entry to scroll to that heading. Relative Markdown links open
+in a new tab in the same window, while http(s) links open in your default
 browser.
 
 The application menu also provides **Set Qdown as Default Markdown Viewer…**,
@@ -108,41 +109,49 @@ runs the following checks:
 - Search using both the CSS Custom Highlight API and the `<mark>` fallback
 - Horizontal scrolling and Mermaid overflow at narrow widths (520px and 380px)
   and at a wide width (1400px)
-- Native window smoke tests: multiple windows, sidebar, match count, zoom
-  persistence, sidebar clicks, and relative Markdown links opening as tabs in
-  the same window
+- Floating outline: one bar per heading, the level classes, the active bar
+  following both a programmatic jump and a bar click, the hover/test panel
+  expanding without reflow, `#qdown-outline` staying outside `#content`, and ⌘F
+  never matching outline text
+- Outline zoom invariance at page zoom 0.5 / 1.0 / 1.25 / 2.5: the effective
+  bar width stays constant, the bars stay inside the text column's right
+  margin, and the page never overflows horizontally
+- Narrow-window outline: the 6–8pt bar variant at 520px/380px
+- Native window smoke tests: multiple windows, outline heading counts, match
+  count, zoom persistence, outline clicks, and relative Markdown links opening
+  as tabs in the same window
 - Window-tab checks: two documents open into one window with two tabs whose
-  titles are the file names, per-tab sidebar state, and scroll position
+  titles are the file names, per-tab outline state, and scroll position
   preserved across tab switches
 - Standard tab detach/merge via `NSWindow` actions, plus the Window menu tab
   commands
 - Real LaunchServices (`open -a`, Finder-style) open events produce one window
   with two tabs
 - Headerless chrome: `fullSizeContentView`, transparent titlebar, hidden title,
-  no titlebar separator, content and sidebar rows below the traffic lights, and
-  the sidebar top strip exposed as a draggable region
-- Sidebar-priority tab strip: AppKit's titlebar tab bar stays suppressed, the
-  custom strip starts exactly at the split position and at the window's top
-  edge, all tabs share one row/height, and the WebView starts below the strip
-- Closing tabs back to one document restores the headerless, tab-strip-hidden
-  layout with the original 28-point safe area and content top
-- Real-screen tab-strip geometry: the app writes its window number and holds
-  while `screencapture` records the window; the image and metadata are checked
-  for the strip's left edge at the split, top edge at the window top, one tab
-  row, and the page starting below it
+  no titlebar separator, content below the traffic lights, and the top strip
+  exposed as a draggable region
+- Native tab bar: AppKit's tab bar is visible when a window has 2+ tabs, the
+  safe area grows beyond the 28pt single-window strip, the WebView starts below
+  it, and the bar spans the whole window
+- Closing tabs back to one document restores the headerless layout with the
+  original 28-point safe area and no tab bar
+- Real-screen geometry: the app writes its window number and holds while
+  `screencapture` records the window. The tabbed capture, the expanded-outline
+  capture, and the single-document capture are each checked against their
+  metadata (native tab bar / safe area / content top / headerless top edge)
 - Blocking of external images, iframes, `javascript:` links, and raw `<script>`
 - `lipo -info` confirmation of the arm64 + x86_64 slices
 
 Results are written to `build/test-output/` as JSON and PNG snapshots. The
 headerless-chrome screenshots are `05-headerless-window.png` /
 `06-headerless-content.png` (no tabs) and `07-headerless-tabs-window.png` /
-`08-headerless-tabs-content.png` (window with Qdown's tab strip). Because the
-strip is an ordinary view it is present in those in-process snapshots, and
-`09-real-tabs-window.png` is a real `screencapture` of the tabbed window.
-`Tests/verify_tab_geometry.py` checks the strip's position, height, single-row
-layout, and the content top from the real image, in addition to the
-`tabBarVisible` / native-tab-bar-hidden / titlebar / safe-area assertions on the
-harness JSON.
+`08-headerless-tabs-content.png` (window with tabs). Real `screencapture`
+images are `09-real-tabs-window.png` (native tab bar + outline bars),
+`10-outline-panel.png` (outline panel expanded), and `11-single-window.png`
+(single document, headerless). `Tests/verify_tab_geometry.py` runs on each of
+the three real-screen images and checks the native-tab-bar/full-width geometry,
+the page top, the 28pt single-window strip, and the outline presence against
+the harness JSON.
 
 ### Verification harness
 
@@ -180,27 +189,36 @@ QDOWNTEST_MODE=live-tabs \
 QDOWNTEST_EXPECT_COUNT=2 \
 QDOWNTEST_JSON=build/test-output/live-tabs.json \
   build/Release/Qdown.app/Contents/MacOS/Qdown
+
+# Single-document real-screen capture (writes windowNumber, then holds)
+QDOWNTEST_MODE=window \
+QDOWNTEST_FILES=test.md \
+QDOWNTEST_OUTLINE_EXPANDED=1 \
+QDOWNTEST_SCREEN_JSON=build/test-output/outline-screen.json \
+QDOWNTEST_HOLD_SECONDS=20 \
+  build/Release/Qdown.app/Contents/MacOS/Qdown
 ```
 
 Common environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `QDOWNTEST_MODE` | `render`, `smoke`, `tabs`, or `live-tabs` |
+| `QDOWNTEST_MODE` | `render`, `smoke`, `tabs`, `live-tabs`, or `window` |
 | `QDOWNTEST_MARKDOWN` | Markdown file to render |
 | `QDOWNTEST_JSON` | Output path for the result JSON |
 | `QDOWNTEST_SNAPSHOT` / `_DIAGRAM` / `_SECTION` | PNG snapshot output paths |
 | `QDOWNTEST_FIND` / `QDOWNTEST_FALLBACK` | Search term / `<mark>` fallback |
 | `QDOWNTEST_FILES` | Files to open in the smoke and tab tests (newline-separated) |
-| `QDOWNTEST_SIDEBAR_SNAPSHOT` | Output path for the sidebar PNG |
 | `QDOWNTEST_WINDOW_SNAPSHOT` | Output path for a whole-window PNG (theme frame, traffic lights included) |
-| `QDOWNTEST_CONTENT_SNAPSHOT` | Output path for a content-view PNG (sidebar + page, no titlebar) |
+| `QDOWNTEST_CONTENT_SNAPSHOT` | Output path for a content-view PNG (page, no titlebar) |
 | `QDOWNTEST_ZOOM_READ_ONLY` | `1` reads the UserDefaults zoom value without modifying it |
 | `QDOWNTEST_LINK` | `1` verifies that a relative link opens a new tab in the same window |
 | `QDOWNTEST_EXPECT_COUNT` | Documents expected from LaunchServices open events (`live-tabs`) |
 | `QDOWNTEST_SCREEN_ONLY` | `1` stops the tabs harness after the initial 2+ tab window is stable (real-screen capture) |
 | `QDOWNTEST_SCREEN_JSON` | JSON output path for the screen-only mode (includes `windowNumber`) |
-| `QDOWNTEST_HOLD_SECONDS` | Keeps the screen-only harness alive for an external `screencapture` |
+| `QDOWNTEST_HOLD_SECONDS` | Keeps the screen harness alive for an external `screencapture` |
+| `QDOWNTEST_OUTLINE_EXPANDED` | `1` opens the outline panel in `window` mode (screenshot hook) |
+| `QDOWNTEST_ZOOM` | Page zoom to apply in `window` mode |
 
 The legacy `--render-test` / `--smoke-test` forms are also accepted for backward
 compatibility, but should not be used in unattended runs.
@@ -218,18 +236,17 @@ Qdown/
     DocumentWindowController.swift
     MarkdownWebView.swift    # WKWebView, JS bridge, drag and drop
     LocalSchemeHandler.swift # qdown://app and qdown://doc, network blocking
-    SidebarViewController.swift
-    FindBarView.swift        # Find bar and content view
+    FindBarView.swift        # Find bar and content view (page reaches the top edge)
     LinkRouter.swift
     ZoomStore.swift
-    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke / tabs / live-tabs
+    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke / tabs / live-tabs / window
   Resources/
     quiet-light.css          # Canonical theme; not modified
-    viewer.html / viewer.css / viewer.js
+    viewer.html / viewer.css / viewer.js  # Markdown page + floating outline
     vendor/                  # marked, highlight.js, mermaid (no network at runtime)
 Tests/
   verify_results.py          # JSON/PNG assertions for the harness output
-  verify_tab_geometry.py     # Real-screen tab bar geometry checks
+  verify_tab_geometry.py     # Real-screen native-tab/outline geometry checks
   fixtures/                  # Relative links, images, security checks
 test.md                      # Sample headings, tables, tasks, code, quotes, Mermaid
 ```
@@ -238,8 +255,8 @@ test.md                      # Sample headings, tables, tasks, code, quotes, Mer
 
 `Qdown/Resources/quiet-light.css` is the canonical theme and is loaded as-is;
 the viewer does not re-derive its colors. `viewer.css` adds only behavior the
-theme does not cover, such as search highlighting, Mermaid scaling, and
-preventing images from overflowing the page.
+theme does not cover, such as search highlighting, Mermaid scaling, preventing
+images from overflowing the page, and the floating outline overlay.
 
 ## Vendored libraries
 

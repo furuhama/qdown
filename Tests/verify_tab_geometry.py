@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
-"""Verify Qdown's sidebar-priority tab strip on a real screen capture.
+"""Verify a Qdown real-screen capture against its window metadata.
 
-Qdown draws the tab strip itself inside the document column, so unlike the old
-native titlebar tab bar it is visible in a `screencapture -l` image. The layout
-contract is:
+Qdown uses AppKit's native window tab bar. The layout contract is:
 
-  * the sidebar owns the window's full height (traffic lights on top),
-  * the tab strip starts exactly at the split position (never over the
-    sidebar) and at the window's top edge (no blank band above the tabs),
-  * every tab is on one row with the same height,
-  * document content starts below the strip.
+  * tabbed windows: the native tab bar spans the whole window, the
+    headerless chrome is still transparent, and the document starts below
+    the extra safe-area inset;
+  * single-document windows: the tab bar is hidden and only the 28pt
+    traffic-light strip remains (the page background reaches the top edge).
 
-Both the geometry metadata written by the tabs harness and the actual pixels
-are checked. Only the standard library is required. Pillow is used when
-available; otherwise the PNG is converted to BMP with `sips` and decoded
-manually.
+Both the metadata written by the harness and the actual pixels are checked.
+Only the standard library is required. Pillow is used when available;
+otherwise the PNG is converted to BMP with `sips` and decoded manually.
 """
 import json
 import re
@@ -109,28 +106,18 @@ def close(a, b, tolerance=6):
     return distance(a, b) <= tolerance
 
 
-def ink_rows(image, x0, x1, y0, y1, threshold=190):
-    """Rows containing dark glyph pixels inside a light tab cell."""
-    rows = []
-    for y in range(y0, max(y0, y1)):
-        for x in range(max(0, x0), max(0, x1)):
-            red, green, blue = image.pixel(x, y)
-            if (red + green + blue) / 3.0 < threshold:
-                rows.append(y)
-                break
-    return rows
-
-
-def ink_center(image, x0, x1, y0, y1):
-    rows = ink_rows(image, x0, x1, y0, y1)
-    if not rows:
-        return None
-    return (min(rows) + max(rows)) / 2.0
+def page_top(image, x, page_color, limit):
+    """First y where five consecutive pixels match the page background."""
+    for y in range(0, limit):
+        if all(close(image.pixel(x, y + offset), page_color, 4)
+               for offset in range(0, 5)):
+            return y
+    return None
 
 
 def main():
     if len(sys.argv) != 3:
-        raise SystemExit("usage: verify_tab_geometry.py <screenshot.png> <tabs-screen.json>")
+        raise SystemExit("usage: verify_tab_geometry.py <screenshot.png> <capture.json>")
 
     screenshot = Path(sys.argv[1])
     metadata_path = Path(sys.argv[2])
@@ -141,204 +128,97 @@ def main():
 
     metadata = json.loads(metadata_path.read_text())
     chrome = metadata.get("chrome") or {}
+    mode = metadata.get("mode") or ""
     frame = parse_frame(metadata.get("windowFrame") or chrome.get("windowFrame"))
     if not frame:
         raise SystemExit("no windowFrame in metadata")
     _, _, window_width, window_height = frame
 
-    tab_left = float(chrome.get("tabBarLeft", -1))
-    tab_top = float(chrome.get("tabBarTop", -1))
-    tab_height = float(chrome.get("tabBarHeight", -1))
-    tab_width = float(chrome.get("tabBarWidth", -1))
-    sidebar_width = float(chrome.get("sidebarWidth", -1))
-    sidebar_right = float(chrome.get("sidebarRight", -1))
-    content_left = float(chrome.get("contentLeft", -1))
+    safe_top = float(chrome.get("contentSafeAreaTop", -1))
+    titlebar_height = float(chrome.get("titlebarHeight", -1))
     webview_top = float(chrome.get("webViewTop", -1))
-    sidebar_header_top = float(chrome.get("sidebarHeaderTop", -1))
-    tabs = chrome.get("tabBarTabs") or []
+    tab_count = int(chrome.get("tabCount", 0))
 
     image = load_image(screenshot)
     scale = image.width / window_width
-    check(1.5 <= scale <= 3.0, "realTabs.captureScale", f"{scale:.3f}x")
+    check(1.5 <= scale <= 3.0, "realScreen.captureScale", f"{scale:.3f}x")
     check(abs(image.height - window_height * scale) <= 3,
-          "realTabs.captureSize",
+          "realScreen.captureSize",
           f"{image.width}x{image.height} for {window_width:g}x{window_height:g}pt")
+    check(metadata.get("windowNumber", -1) > 0, "realScreen.windowNumber",
+          str(metadata.get("windowNumber")))
+    check(chrome.get("fullSizeContentView") is True, "realScreen.fullSizeContentView")
+    check(chrome.get("titlebarAppearsTransparent") is True,
+          "realScreen.titlebarAppearsTransparent")
+    check(chrome.get("titleVisibilityHidden") is True, "realScreen.titleVisibilityHidden")
+    check(chrome.get("titlebarSeparatorStyleNone") is True,
+          "realScreen.titlebarSeparatorStyleNone")
 
-    # ---- Metadata geometry --------------------------------------------------
-    check(chrome.get("tabBarVisible") is True, "realTabs.tabBarVisible",
-          str(chrome.get("tabBarVisible")))
-    check(chrome.get("nativeTabBarVisible") is False,
-          "realTabs.nativeTabBarHidden", str(chrome.get("nativeTabBarVisible")))
-    check(abs(tab_top) <= 0.5, "realTabs.tabBarAtWindowTop", f"top={tab_top:g}pt")
-    check(abs(tab_left - sidebar_right) <= 0.5, "realTabs.tabBarLeftAtSplit",
-          f"left={tab_left:g}pt, sidebarRight={sidebar_right:g}pt")
-    check(abs(content_left - (sidebar_right + 5)) <= 0.5,
-          "realTabs.contentColumnAfterDivider",
-          f"contentLeft={content_left:g}pt, sidebarRight={sidebar_right:g}pt")
-    check(tab_left >= sidebar_width - 0.5, "realTabs.tabBarNeverOverSidebar",
-          f"left={tab_left:g}pt, sidebar={sidebar_width:g}pt")
-    check(abs((tab_left + tab_width) - window_width) <= 0.5,
-          "realTabs.tabBarSpansDocumentColumn",
-          f"right={tab_left + tab_width:g}pt, window={window_width:g}pt")
-    check(abs(tab_height - 34) <= 0.5, "realTabs.tabBarHeight", f"{tab_height:g}pt")
-    check(len(tabs) == 3, "realTabs.tabCount", f"{len(tabs)} tabs")
-    check(bool(tabs) and all(abs(tab.get("top", -99)) <= 0.5 for tab in tabs),
-          "realTabs.allTabsAtWindowTop", str([tab.get("top") for tab in tabs]))
-    check(bool(tabs) and all(abs(tab.get("height", -99) - tab_height) <= 0.5 for tab in tabs),
-          "realTabs.allTabsSameHeight", str([tab.get("height") for tab in tabs]))
-    check(bool(tabs) and all(tab.get("left", -99) >= sidebar_right - 0.5 for tab in tabs),
-          "realTabs.allTabsInsideDocumentColumn",
-          str([tab.get("left") for tab in tabs]))
-    check(webview_top >= tab_height - 0.5, "realTabs.contentBelowTabBar",
-          f"webViewTop={webview_top:g}pt, tabBarHeight={tab_height:g}pt")
-    check(sidebar_header_top == 28, "realTabs.sidebarFullHeight",
-          f"sidebarHeaderTop={sidebar_header_top:g}pt")
-
-    # ---- Title vertical centering (view hierarchy) -------------------------
-    metrics = chrome.get("tabBarTitleMetrics") or []
-    check(bool(tabs) and len(metrics) == len(tabs),
-          "realTabs.titleMetricsPresent", f"{len(metrics)} metrics for {len(tabs)} tabs")
-    if metrics:
-        title_offsets = [float(item.get("titleCenterOffset", 999)) for item in metrics]
-        close_offsets = [float(item.get("closeCenterOffset", 999)) for item in metrics]
-        gaps = [abs(close - title) for title, close in zip(title_offsets, close_offsets)]
-        check(all(abs(offset) <= 1.0 for offset in title_offsets),
-              "realTabs.titleVerticallyCentered",
-              f"title center offsets={[round(v, 2) for v in title_offsets]}pt, "
-              f"close center offsets={[round(v, 2) for v in close_offsets]}pt")
-        check(all(gap <= 1.0 for gap in gaps),
-              "realTabs.closeCenteredWithTitle",
-              f"title/close center gaps={[round(v, 2) for v in gaps]}pt")
-        inside = all(
-            float(item.get("titleTop", -99)) >= 0
-            and float(item.get("titleTop", 999)) + float(item.get("titleHeight", 0))
-            <= tab_height + 0.5
-            for item in metrics
-        )
-        check(inside, "realTabs.titleInsideTabRow",
-              f"titleTop={[round(float(item.get('titleTop', -99)), 2) for item in metrics]}pt")
-
-    # ---- Pixel geometry -----------------------------------------------------
-    # `screencapture` draws a few black pixels of window outline at the very
-    # edge, so sample slightly inside the window.
-    sidebar_color = image.pixel(10, image.height * 0.55)
+    limit = int(image.height * 0.25)
     page_color = image.pixel(image.width - 20, image.height - 20)
-    bar_color = image.pixel(image.width - 20, 3)
-
-    # The top edge over the document column is the tab strip, not page color
-    # and not an empty titlebar band.
-    check(distance(bar_color, page_color) > 6,
-          "realTabs.topEdgeIsTabBarNotPage",
-          f"top={bar_color}, page={page_color}")
-    check(distance(image.pixel(image.width - 20, 3), page_color) > 6,
-          "realTabs.noBlankBandAboveTabs",
-          f"y=3 -> {image.pixel(image.width - 20, 3)}")
-
-    # Scan one row below the traffic lights. Everything left of the split must
-    # still be sidebar; the first non-sidebar pixel must be the tab strip's
-    # left edge.
-    sample_y = int(30 * scale)
-    split_px = int(round(sidebar_right * scale))
-    left_pixels = [image.pixel(x, sample_y) for x in range(0, max(1, split_px - 2))]
-    sidebar_like = sum(1 for pixel in left_pixels if close(pixel, sidebar_color, 7))
-    check(sidebar_like >= len(left_pixels) * 0.97,
-          "realTabs.noTabOverSidebar",
-          f"{sidebar_like}/{len(left_pixels)} sidebar pixels")
-
-    transition = None
-    for x in range(0, image.width):
-        if distance(image.pixel(x, sample_y), sidebar_color) > 7:
-            transition = x
-            break
-    check(transition is not None, "realTabs.tabBarLeftEdgeFound")
-    if transition is not None:
-        check(abs(transition / scale - sidebar_right) <= 2.0,
-              "realTabs.tabBarLeftEdgeAtSplit",
-              f"edge={transition / scale:.1f}pt, split={sidebar_right:g}pt")
-
-    # At the right edge the strip changes into the page exactly at the tab
-    # strip's bottom edge.
-    transition_y = None
+    left_x = int(image.width * 0.12)
     right_x = image.width - 20
-    # Require a short run of page pixels so the anti-aliased window outline at
-    # the very top is not mistaken for the start of the page.
-    for y in range(0, int(image.height * 0.25)):
-        if all(close(image.pixel(right_x, y + offset), page_color, 3)
-               for offset in range(0, 5)):
-            transition_y = y
-            break
-    check(transition_y is not None, "realTabs.pageBelowTabBarFound")
-    if transition_y is not None:
-        check(abs(transition_y / scale - tab_height) <= 3.0,
-              "realTabs.pageStartsBelowTabBar",
-              f"pageTop={transition_y / scale:.1f}pt, tabBarHeight={tab_height:g}pt")
 
-    # Every tab starts at the same top edge and ends at the same bottom edge,
-    # both in metadata and in the actual pixels.
-    top_ok = True
-    bottom_ok = True
-    for index, tab in enumerate(tabs):
-        center_x = int((tab["left"] + tab["width"] / 2) * scale)
-        top_pixel = image.pixel(center_x, max(1, int(2 * scale)))
-        if close(top_pixel, page_color, 5) or close(top_pixel, sidebar_color, 5):
-            top_ok = False
-        below_pixel = image.pixel(center_x, int((tab_height + 5) * scale))
-        if not close(below_pixel, page_color, 8):
-            bottom_ok = False
-        print(f"    tab[{index}] center={center_x/scale:.1f}pt "
-              f"top={top_pixel} below={below_pixel}")
-    check(top_ok, "realTabs.allTabsShareTopRow")
-    check(bottom_ok, "realTabs.allTabsShareBottomEdge")
+    if mode == "tabs-screen":
+        # ---- Native AppKit tab bar, full width ------------------------------
+        check(chrome.get("nativeTabBarVisible") is True,
+              "realTabs.nativeTabBarVisible")
+        check(safe_top > 28, "realTabs.safeAreaTop", f"{safe_top:g}pt")
+        check(abs(titlebar_height - safe_top) <= 0.5, "realTabs.titlebarHeight",
+              f"{titlebar_height:g}pt vs safeTop {safe_top:g}pt")
+        check(webview_top >= safe_top - 0.5, "realTabs.webViewClearOfTabBar",
+              f"webViewTop={webview_top:g}pt")
+        check(tab_count == 3, "realTabs.tabCount", f"{tab_count} tabs")
 
-    # ---- Title vertical centering (actual pixels) --------------------------
-    # Measure the dark glyph ink rows inside each tab: the title text must be
-    # centered on the tab row's vertical center, and the title ink must share
-    # its center with the close glyph. The bottom 4pt are excluded because the
-    # selected tab has a 2pt accent rule and every tab has a 1pt separator.
-    bar_center_px = tab_height / 2.0 * scale
-    ink_top = int(round(2 * scale))
-    ink_bottom = int(round((tab_height - 4) * scale))
-    for index, tab in enumerate(tabs):
-        tab_left = float(tab["left"])
-        tab_width = float(tab["width"])
-        title_center = ink_center(
-            image,
-            int(round((tab_left + 14) * scale)),
-            int(round((tab_left + max(0, tab_width - 40)) * scale)),
-            ink_top, ink_bottom,
-        )
-        close_center = ink_center(
-            image,
-            int(round((tab_left + tab_width - 22) * scale)),
-            int(round((tab_left + tab_width - 6) * scale)),
-            ink_top, ink_bottom,
-        )
-        if title_center is None or close_center is None:
-            check(False, f"realTabs.tab{index}.titleAndCloseInkFound",
-                  f"title={title_center}, close={close_center}")
-            continue
-        title_offset = (title_center - bar_center_px) / scale
-        close_offset = (close_center - bar_center_px) / scale
-        gap = abs(title_center - close_center) / scale
-        print(f"    tab[{index}] titleInkCenterOffset={title_offset:.2f}pt "
-              f"closeInkCenterOffset={close_offset:.2f}pt gap={gap:.2f}pt")
-        check(abs(title_offset) <= 3.0,
-              f"realTabs.tab{index}.titleInkVerticallyCentered",
-              f"offset={title_offset:.2f}pt")
-        check(gap <= 2.5,
-              f"realTabs.tab{index}.titleAndCloseSameHeight",
-              f"gap={gap:.2f}pt")
+        # The transparent titlebar shares the page's lavender background, so
+        # the tab bar is detected by its tab-title ink rather than by colour.
+        # Titles are distributed across the full width: sample all three thirds
+        # of the titlebar row.
+        def title_ink(x0, x1):
+            y0 = max(1, int(10 * scale))
+            y1 = max(y0 + 1, int((safe_top - 8) * scale))
+            for y in range(y0, y1):
+                for x in range(max(0, int(x0)), min(image.width, int(x1))):
+                    red, green, blue = image.pixel(x, y)
+                    if (red + green + blue) / 3.0 < 190:
+                        return True
+            return False
+
+        margin = int(image.width * 0.10)
+        check(title_ink(margin, image.width * 0.36), "realTabs.titleInkLeftThird")
+        check(title_ink(image.width * 0.36, image.width * 0.66),
+              "realTabs.titleInkMiddleThird")
+        check(title_ink(image.width * 0.66, image.width - margin),
+              "realTabs.titleInkRightThird")
+        check(title_ink(margin, image.width - margin),
+              "realTabs.nativeTabBarRowHasTitles")
+    else:
+        # ---- Single document: 28pt headerless strip, no tab bar ------------
+        check(chrome.get("tabBarVisible") is False, "realSingle.tabBarHidden",
+              str(chrome.get("tabBarVisible")))
+        check(chrome.get("nativeTabBarVisible") is False,
+              "realSingle.nativeTabBarHidden", str(chrome.get("nativeTabBarVisible")))
+        check(safe_top == 28, "realSingle.safeAreaTop", f"{safe_top:g}pt")
+        check(titlebar_height == 28, "realSingle.titlebarHeight",
+              f"{titlebar_height:g}pt")
+        check(webview_top >= 28 - 0.5, "realSingle.webViewTop",
+              f"webViewTop={webview_top:g}pt")
+        top_center = image.pixel(image.width // 2, max(1, int(6 * scale)))
+        check(close(top_center, page_color, 8), "realSingle.headerlessPageAtTopEdge",
+              f"top={top_center}, page={page_color}")
+        check(chrome.get("contentDragRegionAcceptsMouse") is True,
+              "realSingle.dragRegionAcceptsMouse")
 
     finish()
 
 
 def finish():
     if FAILURES:
-        print(f"{len(FAILURES)} tab geometry check(s) failed out of {CHECKS}:")
+        print(f"{len(FAILURES)} real-screen check(s) failed out of {CHECKS}:")
         for failure in FAILURES:
             print("  - " + failure)
         raise SystemExit(1)
-    print(f"All {CHECKS} tab geometry checks passed.")
+    print(f"All {CHECKS} real-screen checks passed.")
 
 
 if __name__ == "__main__":

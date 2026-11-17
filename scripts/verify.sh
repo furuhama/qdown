@@ -42,9 +42,10 @@ rm -f "$OUT"/render.json "$OUT"/render-fallback.json "$OUT"/security.json \
       "$OUT"/tabs-screen.json "$OUT"/tabs-screen.stdout "$OUT"/tabs-screen.stderr \
       "$OUT"/smoke-live-tabs.stdout "$OUT"/smoke-live-tabs.stderr "$OUT"/live-tabs.json \
       "$OUT"/01-top.png "$OUT"/02-mermaid.png "$OUT"/03-section.png \
-      "$OUT"/04-sidebar.png "$OUT"/05-headerless-window.png \
-      "$OUT"/06-headerless-content.png "$OUT"/07-headerless-tabs-window.png \
-      "$OUT"/08-headerless-tabs-content.png "$OUT"/09-real-tabs-window.png
+      "$OUT"/05-headerless-window.png "$OUT"/06-headerless-content.png \
+      "$OUT"/07-headerless-tabs-window.png "$OUT"/08-headerless-tabs-content.png \
+      "$OUT"/09-real-tabs-window.png "$OUT"/10-outline-panel.png \
+      "$OUT"/11-single-window.png
 
 kill_qdown() {
   pkill -x Qdown 2>/dev/null || true
@@ -105,7 +106,6 @@ run_qdown security \
 run_qdown smoke-two \
   QDOWNTEST_MODE=smoke \
   QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md' \
-  QDOWNTEST_SIDEBAR_SNAPSHOT=build/test-output/04-sidebar.png \
   QDOWNTEST_WINDOW_SNAPSHOT=build/test-output/05-headerless-window.png \
   QDOWNTEST_CONTENT_SNAPSHOT=build/test-output/06-headerless-content.png
 
@@ -130,12 +130,12 @@ run_qdown smoke-tabs \
   QDOWNTEST_WINDOW_SNAPSHOT=build/test-output/07-headerless-tabs-window.png \
   QDOWNTEST_CONTENT_SNAPSHOT=build/test-output/08-headerless-tabs-content.png
 
-# Qdown draws its own tab strip, so it is present in the in-process snapshots
-# above. The real-screen capture is still the authoritative proof that the
-# strip starts at the split position and the window's top edge. The tabs
-# harness writes the window number and keeps the app alive while we record the
-# window with the system screencapture tool; Tests/verify_tab_geometry.py then
-# checks the strip geometry and that content starts below it.
+# The real-screen capture is the authoritative proof of AppKit's native tab
+# bar: it is window-server chrome and does not appear in the in-process
+# snapshots above. The tabs harness writes the window number and keeps the app
+# alive while we record the window with the system screencapture tool;
+# Tests/verify_tab_geometry.py then checks the tab bar/full-width geometry and
+# that the document starts below it.
 echo "==> tabs real-screen geometry (screencapture)"
 kill_qdown
 rm -f "$OUT"/tabs-screen.json "$OUT"/tabs-screen.stdout "$OUT"/tabs-screen.stderr \
@@ -175,6 +175,7 @@ if [ -z "$window_id" ]; then
   exit 1
 fi
 capture_status=0
+caffeinate -u -t 1
 /usr/sbin/screencapture -x -o -l "$window_id" "$OUT/09-real-tabs-window.png" || capture_status=$?
 kill_qdown
 wait "$screen_pid" 2>/dev/null || true
@@ -183,6 +184,69 @@ if [ "$capture_status" -ne 0 ] || [ ! -s "$OUT/09-real-tabs-window.png" ]; then
   exit 1
 fi
 echo "    captured window $window_id -> 09-real-tabs-window.png"
+
+# capture_window <name> <png> <json> [extra env assignments...]
+# Starts a single-document window harness, waits for its window number, then
+# records that window with screencapture. The app is always started with only
+# environment settings (no option-style argv).
+capture_window() {
+  local name="$1" png="$2" json="$3"
+  shift 3
+
+  echo "==> $name (screencapture)"
+  kill_qdown
+  rm -f "$json" "$OUT/$name.stdout" "$OUT/$name.stderr" "$png"
+  timeout --signal=TERM --kill-after=5 "$TIMEOUT_SECS" env \
+    QDOWNTEST_MODE=window \
+    QDOWNTEST_FILES=test.md \
+    QDOWNTEST_SCREEN_JSON="$json" \
+    QDOWNTEST_HOLD_SECONDS=20 \
+    "$@" "$QS" > "$OUT/$name.stdout" 2> "$OUT/$name.stderr" &
+  local pid=$!
+  for _ in $(seq 1 80); do
+    [ -s "$json" ] && break
+    sleep 0.25
+  done
+  if [ ! -s "$json" ]; then
+    echo "error: $name harness did not write its JSON" >&2
+    tail -20 "$OUT/$name.stderr" >&2 || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    kill_qdown
+    exit 1
+  fi
+  local window_id
+  window_id="$(python3 - "$json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+print(data.get("windowNumber") or data.get("chrome", {}).get("windowNumber") or "")
+PY
+  )"
+  if [ -z "$window_id" ]; then
+    echo "error: $json has no windowNumber" >&2
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    kill_qdown
+    exit 1
+  fi
+  local capture_status=0
+  caffeinate -u -t 1
+  /usr/sbin/screencapture -x -o -l "$window_id" "$png" || capture_status=$?
+  kill_qdown
+  wait "$pid" 2>/dev/null || true
+  if [ "$capture_status" -ne 0 ] || [ ! -s "$png" ]; then
+    echo "error: screencapture failed for $name (window $window_id, status $capture_status)" >&2
+    exit 1
+  fi
+  echo "    captured window $window_id -> $(basename "$png")"
+}
+
+# Single document with the floating outline panel forced open (test hook).
+capture_window outline-screen "$OUT/10-outline-panel.png" "$OUT/outline-screen.json" \
+  QDOWNTEST_OUTLINE_EXPANDED=1
+# Single document, headerless: native tab bar hidden, 28pt top strip.
+capture_window single-screen "$OUT/11-single-window.png" "$OUT/single-screen.json"
 
 # Real LaunchServices/Mac Finder path: the app is started directly so it can
 # read its test environment, then `open -a` delivers ordinary `odoc` open
@@ -214,8 +278,10 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
-echo "==> Checking tab bar geometry"
+echo "==> Checking real-screen geometry"
 python3 "$ROOT/Tests/verify_tab_geometry.py" "$OUT/09-real-tabs-window.png" "$OUT/tabs-screen.json"
+python3 "$ROOT/Tests/verify_tab_geometry.py" "$OUT/10-outline-panel.png" "$OUT/outline-screen.json"
+python3 "$ROOT/Tests/verify_tab_geometry.py" "$OUT/11-single-window.png" "$OUT/single-screen.json"
 
 echo "==> Checking results"
 python3 "$ROOT/Tests/verify_results.py" "$OUT"

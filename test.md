@@ -10,7 +10,7 @@ Qdown は Quiet Light テーマ専用の、窓型 macOS Markdown ビューアで
 
 #### 見出しレベル4
 
-見出しレベル 4 の本文です。サイドバーでは h1 から h6 までが階層表示されます。
+見出しレベル 4 の本文です。右端のフローティング目次では h1 から h6 までが階層表示されます。
 
 ##### 見出しレベル5
 
@@ -18,7 +18,7 @@ Qdown は Quiet Light テーマ専用の、窓型 macOS Markdown ビューアで
 
 ###### 見出しレベル6
 
-見出しレベル 6 の本文です。ここまでがサイドバーの対象です。
+見出しレベル 6 の本文です。ここまでが目次の対象です。
 
 ## リスト
 
@@ -44,7 +44,7 @@ Qdown は Quiet Light テーマ専用の、窓型 macOS Markdown ビューアで
 
 | 機能 | 状態 | 備考 |
 | --- | --- | --- |
-| 見出しサイドバー | 実装 | h1–h6 を階層表示 |
+| フローティング目次 | 実装 | h1–h6 を階層表示 |
 | 検索 | 実装 | ⌘F / ⌘G / ⇧⌘G |
 | Mermaid | 実装 | base テーマ + Quiet Light 変数 |
 | ズーム | 実装 | ⌘+ / ⌘− / ⌘0、再起動後も保持 |
@@ -152,7 +152,7 @@ sequenceDiagram
 
 ```mermaid
 graph TD
-    Root[Qdown] --> Sidebar[見出しサイドバー]
+    Root[Qdown] --> Outline[フローティング目次]
     Root --> Content[本文]
     Content --> Search[⌘F 検索]
     Content --> Zoom[⌘+/- ズーム]

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Assert Qdown's automated verification results."""
+"""Assert Qdown's automated verification results.
+
+The suite covers Markdown rendering, the shared theme, find, the floating
+outline (method A), AppKit's native window tabs, and the headerless window.
+"""
 import hashlib
 import json
 import plistlib
-import re
 import sys
 from pathlib import Path
 
@@ -29,75 +32,33 @@ def load_json_with_prefix(path, prefix):
     return json.loads(text[index:])
 
 
-def parse_window_size(text):
-    """Parse an AppKit `{1120, 808}` size string."""
-    match = re.match(r"\{\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\}", text or "")
-    if not match:
-        return None
-    return float(match.group(1)), float(match.group(2))
+def load_outline(value):
+    """The harness stores outlineDebug() as a JSON string."""
+    if isinstance(value, dict):
+        return value
+    try:
+        return json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
 
 
-def check_document_tab_strip(chrome, prefix, expected_count):
-    """Assert the sidebar-priority custom tab strip geometry.
-
-    * the strip starts at the split position (never over the sidebar),
-    * its top is the window's top edge (no blank band above the tabs),
-    * every tab is on the same single row with the same height.
-    """
-    check(chrome.get("tabBarVisible") is True, f"{prefix}.tabBarVisible")
-    check(chrome.get("nativeTabBarVisible") is False,
-          f"{prefix}.nativeTabBarHidden", str(chrome.get("nativeTabBarVisible")))
-    check(chrome.get("tabBarTabCount") == expected_count,
-          f"{prefix}.tabBarTabCount", str(chrome.get("tabBarTabCount")))
-
-    left = chrome.get("tabBarLeft", -1)
-    top = chrome.get("tabBarTop", -1)
-    height = chrome.get("tabBarHeight", -1)
-    width = chrome.get("tabBarWidth", -1)
-    content_left = chrome.get("contentLeft", -1)
-    sidebar_right = chrome.get("sidebarRight", -1)
-    sidebar_width = chrome.get("sidebarWidth", -1)
-    window_size = parse_window_size(chrome.get("windowSize"))
-    window_width = window_size[0] if window_size else -1
-
-    check(abs(top) <= 0.5, f"{prefix}.tabBarAtWindowTop", f"top={top:g}")
-    check(abs(left - sidebar_right) <= 0.5, f"{prefix}.tabBarLeftAtSplit",
-          f"left={left:g}, sidebarRight={sidebar_right:g}")
-    check(abs(content_left - (sidebar_right + 5)) <= 0.5,
-          f"{prefix}.contentColumnAfterDivider",
-          f"contentLeft={content_left:g}, sidebarRight={sidebar_right:g}")
-    check(abs(sidebar_right - sidebar_width) <= 0.5, f"{prefix}.splitAtSidebarWidth",
-          f"sidebarRight={sidebar_right:g}, sidebarWidth={sidebar_width:g}")
-    check(left >= sidebar_width - 0.5, f"{prefix}.tabBarNeverOverSidebar",
-          f"left={left:g}, sidebar={sidebar_width:g}")
-    check(abs(height - 34) <= 0.5, f"{prefix}.tabBarHeight", f"{height:g}pt")
-    check(window_width > 0 and abs((left + width) - window_width) <= 0.5,
-          f"{prefix}.tabBarSpansDocumentColumn",
-          f"right={left + width:g}, windowWidth={window_width:g}")
-    check(chrome.get("contentSafeAreaTop") == 28,
-          f"{prefix}.nativeTabBarRemoved", str(chrome.get("contentSafeAreaTop")))
-    check(chrome.get("sidebarHeaderTop") == 28,
-          f"{prefix}.sidebarFullHeight", str(chrome.get("sidebarHeaderTop")))
-    check(chrome.get("webViewTop", -1) >= height - 0.5,
-          f"{prefix}.contentBelowTabBar",
-          f"webViewTop={chrome.get('webViewTop')}, tabBarHeight={height:g}")
-
-    tabs = chrome.get("tabBarTabs", [])
-    check(len(tabs) == expected_count, f"{prefix}.tabFramesCount", str(len(tabs)))
-    check(bool(tabs) and all(abs(tab.get("top", -99)) <= 0.5 for tab in tabs),
-          f"{prefix}.allTabsAtWindowTop",
-          str([tab.get("top") for tab in tabs]))
-    check(bool(tabs) and all(abs(tab.get("height", -99) - height) <= 0.5 for tab in tabs),
-          f"{prefix}.allTabsSameHeight",
-          str([tab.get("height") for tab in tabs]))
-    check(bool(tabs) and all(tab.get("left", -99) >= sidebar_right - 0.5 for tab in tabs),
-          f"{prefix}.allTabsInsideDocumentColumn",
-          str([tab.get("left") for tab in tabs]))
-    if window_width > 0:
-        check(bool(tabs) and all(tab.get("left", 0) + tab.get("width", 0)
-                                 <= window_width + 0.5 for tab in tabs),
-              f"{prefix}.allTabsWithinWindow",
-              str([(tab.get("left"), tab.get("width")) for tab in tabs]))
+def check_outline_headings(outline, prefix, expected=None):
+    check(outline.get("present") is True, f"{prefix}.outlinePresent")
+    check(outline.get("insideContent") is False, f"{prefix}.outlineOutsideContent",
+          str(outline.get("insideContent")))
+    check(outline.get("barCount") == outline.get("headingCount"),
+          f"{prefix}.outlineBarCount",
+          f"{outline.get('barCount')} != {outline.get('headingCount')}")
+    check(outline.get("itemCount") == outline.get("headingCount"),
+          f"{prefix}.outlineItemCount",
+          f"{outline.get('itemCount')} != {outline.get('headingCount')}")
+    if expected is not None:
+        check(outline.get("headingCount") == expected, f"{prefix}.outlineHeadingCount",
+              str(outline.get("headingCount")))
+    check(outline.get("userSelect") == "none", f"{prefix}.outlineUserSelectNone",
+          str(outline.get("userSelect")))
+    check(all(width > 0 for width in outline.get("barWidths", [])),
+          f"{prefix}.outlineBarsHaveWidth", str(outline.get("barWidths")))
 
 
 def main():
@@ -114,6 +75,8 @@ def main():
     tabs = json.loads((out / "tabs.json").read_text())
     tabs_screen = json.loads((out / "tabs-screen.json").read_text())
     live_tabs = json.loads((out / "live-tabs.json").read_text())
+    outline_screen = json.loads((out / "outline-screen.json").read_text())
+    single_screen = json.loads((out / "single-screen.json").read_text())
 
     # ---- Markdown rendering -------------------------------------------------
     initial = render["initial"]
@@ -142,6 +105,34 @@ def main():
     check(render["requestedResources"], "render.requestedResources empty")
     check(all(url.startswith("qdown://") for url in render["requestedResources"]),
           "render.requestedResources non-qdown", str(render["requestedResources"]))
+
+    # ---- Floating outline (static) -----------------------------------------
+    initial_outline = initial.get("outline", {})
+    check_outline_headings(initial_outline, "render.initial", 16)
+    check(initial_outline.get("activeIndex") == 0, "render.initial.outlineActiveFirst",
+          str(initial_outline.get("activeIndex")))
+    check(initial_outline.get("activeId") == "qdown-heading-0",
+          "render.initial.outlineActiveFirstId", str(initial_outline.get("activeId")))
+    bar_widths = initial_outline.get("rectEffectiveBarWidths", [])
+    check(len(bar_widths) == initial_outline.get("headingCount"),
+          "render.initial.outlineWidthCount", str(len(bar_widths)))
+    check(len({round(width, 1) for width in bar_widths}) >= 3,
+          "render.initial.outlineLevelWidths", str(bar_widths[:8]))
+    check(len(set(initial_outline.get("levels", []))) >= 4,
+          "render.initial.outlineLevels", str(initial_outline.get("levels")))
+    check(abs(initial_outline.get("outlineRight", 0)
+              - initial_outline.get("bodyRight", 0)) <= 2.0,
+          "render.initial.outlineAtTextRightEdge",
+          f"outlineRight={initial_outline.get('outlineRight')}, "
+          f"bodyRight={initial_outline.get('bodyRight')}")
+    check(abs(initial_outline.get("outlineHeight", 0)
+              - initial_outline.get("viewportHeight", 0)
+              * initial_outline.get("pageZoom", 1)) <= 2.0,
+          "render.initial.outlineFullHeight",
+          f"{initial_outline.get('outlineHeight')} vs "
+          f"{initial_outline.get('viewportHeight')}*{initial_outline.get('pageZoom')}")
+    check(initial_outline.get("compact") is False,
+          "render.initial.outlineNotCompact", str(initial_outline.get("compact")))
 
     # ---- Theme colours ------------------------------------------------------
     theme = initial["theme"]
@@ -184,6 +175,11 @@ def main():
     check(next_find["current"] == 2, "find.next.current", str(next_find["current"]))
     check(zero_find["count"] == 0, "find.zero.count", str(zero_find["count"]))
 
+    # The outline is outside #content, so find must never match its labels.
+    check(render["find"]["first"].get("outline", {}).get("findRangesInsideOutline") == 0,
+          "find.outlineNotSearched",
+          str(render["find"]["first"].get("outline", {}).get("findRangesInsideOutline")))
+
     fb_first = fallback["find"]["first"]
     check(fb_first["find"]["mode"] == "mark", "fallback.mode", fb_first["find"]["mode"])
     check(fb_first["markCount"] >= 8, "fallback.markCount", str(fb_first["markCount"]))
@@ -202,6 +198,17 @@ def main():
     check(render["compact"]["layout"]["contentWidth"] < render["narrow"]["layout"]["contentWidth"],
           "layout.compact narrower than narrow")
 
+    # Narrow windows use the 6-8pt bar variant and stay inside the page.
+    narrow_outline = render["narrow"].get("outline", {})
+    check(narrow_outline.get("compact") is True, "outline.narrow.compact",
+          str(narrow_outline.get("compact")))
+    check(max(narrow_outline.get("rectEffectiveBarWidths") or [99]) <= 8.5,
+          "outline.narrow.barWidth", str(narrow_outline.get("rectEffectiveBarWidths")))
+    check(min(narrow_outline.get("barRightGaps") or [0]) >= 0,
+          "outline.narrow.barsInsideWindow", str(narrow_outline.get("barRightGaps")))
+    check(render["wide"].get("outline", {}).get("compact") is False,
+          "outline.wide.notCompact")
+
     # ---- Links / heading jump ----------------------------------------------
     check(render["headingScroll"]["layout"]["bodyScrollY"] > 0,
           "headingScroll.scrollY", str(render["headingScroll"]["layout"]["bodyScrollY"]))
@@ -211,6 +218,52 @@ def main():
           "linkEvents.external", str(render["linkEvents"]))
     check(render["linkInfo"]["href"].startswith("qdown://app/viewer.html"),
           "linkInfo.stayedOnViewer", str(render["linkInfo"]))
+
+    # ---- Floating outline (behaviour) --------------------------------------
+    target = render["headingScroll"].get("targetHeading")
+    after_scroll = render["outlineAfterScroll"].get("outline", {})
+    check(after_scroll.get("activeId") == target, "outline.scroll.activeFollowsHeading",
+          f"{after_scroll.get('activeId')} != {target}")
+    check(render["outlineAfterScroll"]["layout"]["bodyScrollY"] > 0,
+          "outline.scroll.scrollY")
+
+    click = render["outlineClick"]
+    clicked_index = click.get("clickedIndex", -1)
+    check(clicked_index == 3, "outline.click.barClicked", str(clicked_index))
+    check(click.get("outline", {}).get("activeIndex") == clicked_index,
+          "outline.click.activeFollowsBar", str(click.get("outline", {}).get("activeIndex")))
+    clicked_top = click.get("targetHeadingTop", -9999)
+    check(isinstance(clicked_top, (int, float)) and -8 <= clicked_top <= 60,
+          "outline.click.headingNearTop", str(clicked_top))
+    check(click.get("scrollY", 0) > 0, "outline.click.scrolled", str(click.get("scrollY")))
+
+    expanded = render["outlineExpanded"].get("outline", {})
+    check(expanded.get("expanded") is True, "outline.panel.expanded")
+    check(expanded.get("panelVisible") is True, "outline.panel.visible")
+    check(120 <= expanded.get("panelWidth", 0) <= 260, "outline.panel.width",
+          str(expanded.get("panelWidth")))
+    check(expanded.get("panelHeight", 0) <= expanded.get("viewportHeight", 0) * 0.66,
+          "outline.panel.height", str(expanded.get("panelHeight")))
+    check(expanded.get("userSelect") == "none", "outline.panel.userSelectNone")
+
+    # ---- Floating outline (zoom invariance) --------------------------------
+    zooms = render["outlineZooms"]
+    check(set(zooms.keys()) == {"0.50", "1.00", "1.25", "2.50"},
+          "outline.zoom.cases", str(sorted(zooms.keys())))
+    baseline = zooms.get("1.00", {}).get("outline", {}).get("rectEffectiveBarWidths", [])
+    check(bool(baseline), "outline.zoom.baseline")
+    for key in ("0.50", "1.00", "1.25", "2.50"):
+        entry = zooms.get(key, {})
+        outline = entry.get("outline", {})
+        widths = outline.get("rectEffectiveBarWidths", [])
+        check(len(widths) == len(baseline)
+              and all(abs(width - base) <= 0.6 for width, base in zip(widths, baseline)),
+              f"outline.zoom.{key}.barWidthConstant", str(widths[:6]))
+        gaps = outline.get("barRightGaps", [])
+        check(bool(gaps) and all(gap > 0 for gap in gaps),
+              f"outline.zoom.{key}.barsInsideViewport", str(gaps[:3]))
+        check(entry.get("layout", {}).get("overflowX") is False,
+              f"outline.zoom.{key}.noOverflow")
 
     # ---- Security fixture ---------------------------------------------------
     sec = security["security"]
@@ -232,14 +285,14 @@ def main():
           str(smoke_two["visibleWindows"]))
     states = smoke_two["states"]
     check(states[0]["title"] == "test.md", "smoke.first.title", states[0]["title"])
-    check(states[0]["sidebarHeadings"] == 16, "smoke.first.sidebarHeadings",
-          str(states[0]["sidebarHeadings"]))
+    check(states[0]["outlineHeadingCount"] == 16, "smoke.first.outlineHeadingCount",
+          str(states[0]["outlineHeadingCount"]))
     check(states[1]["title"] == "other.md", "smoke.second.title", states[1]["title"])
-    check(states[1]["sidebarHeadings"] >= 2, "smoke.second.sidebarHeadings",
-          str(states[1]["sidebarHeadings"]))
+    check(states[1]["outlineHeadingCount"] >= 2, "smoke.second.outlineHeadingCount",
+          str(states[1]["outlineHeadingCount"]))
     check(states[0]["pageZoom"] == 1.25, "smoke.zoomPersisted", str(states[0]["pageZoom"]))
 
-    # ---- Headerless chrome (single window, tab bar hidden) -----------------
+    # ---- Headerless chrome (single window, no native tab bar) --------------
     chrome = states[0]
     check(chrome.get("fullSizeContentView") is True, "chrome.fullSizeContentView")
     check(chrome.get("titlebarAppearsTransparent") is True,
@@ -252,17 +305,12 @@ def main():
     check(safe_top == 28, "chrome.contentSafeAreaTop", str(safe_top))
     check(chrome.get("titlebarHeight", -1) == safe_top, "chrome.titlebarHeight",
           str(chrome.get("titlebarHeight")))
-    check(chrome.get("sidebarDragRegionHeight", -1) == safe_top,
-          "chrome.sidebarDragRegionHeight",
-          f"{chrome.get('sidebarDragRegionHeight')} != {safe_top}")
-    check(chrome.get("sidebarDragHandlesAcceptMouse") is True,
-          "chrome.sidebarDragHandlesAcceptMouse")
+    check(chrome.get("tabBarVisible") is False, "chrome.nativeTabBarHidden",
+          str(chrome.get("tabBarVisible")))
+    check(chrome.get("nativeTabBarVisible") is False, "chrome.nativeTabBarHiddenAlias",
+          str(chrome.get("nativeTabBarVisible")))
     check(chrome.get("contentDragRegionAcceptsMouse") is True,
           "chrome.contentDragRegionAcceptsMouse")
-    check(chrome.get("sidebarHeaderTop", -1) >= safe_top, "chrome.sidebarHeaderTop",
-          str(chrome.get("sidebarHeaderTop")))
-    check(chrome.get("sidebarFirstRowTop", -1) >= safe_top + 34, "chrome.sidebarFirstRowTop",
-          str(chrome.get("sidebarFirstRowTop")))
     check(chrome.get("webViewTop", -1) >= safe_top, "chrome.webViewTop",
           str(chrome.get("webViewTop")))
     check(chrome.get("findBarTop", -1) >= safe_top, "chrome.findBarTop",
@@ -274,13 +322,13 @@ def main():
     check(extras["zoomIn"] == 1.5, "smoke.zoomIn", str(extras["zoomIn"]))
     check(extras["actualSize"] == 1, "smoke.actualSize", str(extras["actualSize"]))
     check(extras["persistedZoomAfterReset"] == 1, "smoke.persistedZoomAfterReset")
-    jumps = extras.get("sidebarJumps", [])
-    check(len(jumps) == states[0]["sidebarHeadings"], "smoke.sidebarJumpCount",
-          f"{len(jumps)} != {states[0]['sidebarHeadings']}")
-    check(all(jump.get("clicked") is True for jump in jumps),
-          "smoke.sidebarAllClicked", str([j for j in jumps if j.get("clicked") is not True]))
-    check(all(jump.get("visible") is True for jump in jumps),
-          "smoke.sidebarAllVisible", str([j for j in jumps if j.get("visible") is not True]))
+
+    smoke_outline = load_outline(extras.get("outline"))
+    check_outline_headings(smoke_outline, "smoke")
+    check(extras.get("outlineClick") is True, "smoke.outlineClick")
+    after_click = load_outline(extras.get("outlineAfterClick"))
+    check(after_click.get("activeIndex") == after_click.get("headingCount", 0) - 1,
+          "smoke.outlineActiveAfterClick", str(after_click.get("activeIndex")))
 
     # ---- Cross-process zoom persistence -------------------------------------
     zoom_states = smoke_zoom["states"]
@@ -299,9 +347,6 @@ def main():
           extras["findCountTextAfterNext"])
     check(extras["findCountTextAfterPrevious"] == "1/8 件", "smoke.findPrevious",
           extras["findCountTextAfterPrevious"])
-    check(extras["sidebarClick"] is True, "smoke.sidebarClick")
-    check(extras["sidebarClickScrollY"] > 0, "smoke.sidebarClickScrollY",
-          str(extras["sidebarClickScrollY"]))
     check(extras["linkRouter"]["https://example.com/"].startswith("external:"),
           "smoke.linkRouter.https", extras["linkRouter"]["https://example.com/"])
     check(extras["linkRouter"]["javascript:alert(1)"] == "unsupported",
@@ -327,16 +372,16 @@ def main():
     check(opened["titles"] == ["other.md", "test.md"], "tabs.titles", str(opened["titles"]))
     check(opened["documentWindowCount"] == 1, "tabs.documentWindowCount",
           str(opened["documentWindowCount"]))
-    check(opened["tabBarVisible"] is True, "tabs.tabBarVisible")
-    check(opened.get("nativeTabBarVisible") is False, "tabs.nativeTabBarHidden",
+    check(opened["tabBarVisible"] is True, "tabs.nativeTabBarVisible")
+    check(opened.get("nativeTabBarVisible") is True, "tabs.nativeTabBarVisibleAlias",
           str(opened.get("nativeTabBarVisible")))
 
-    # Qdown draws its own tab strip in the document column. The sidebar keeps
-    # the full window height (traffic lights on top), the strip starts exactly
-    # at the split position and at the window's top edge, and all tabs share a
-    # single row. The native titlebar tab bar must never come back.
+    # AppKit's native tab bar is a titlebar row: it spans the whole window and
+    # pushes the document down by the extra safe-area inset. There is no custom
+    # tab strip or sidebar anymore.
     tabs_chrome = opened.get("chrome", {})
-    check_document_tab_strip(tabs_chrome, "tabs.chrome", 2)
+    tab_safe_top = tabs_chrome.get("contentSafeAreaTop", -1)
+    check(tabs_chrome.get("nativeTabBarVisible") is True, "tabs.chrome.nativeTabBarVisible")
     check(tabs_chrome.get("fullSizeContentView") is True, "tabs.chrome.fullSizeContentView")
     check(tabs_chrome.get("titlebarAppearsTransparent") is True,
           "tabs.chrome.titlebarAppearsTransparent")
@@ -344,18 +389,13 @@ def main():
           "tabs.chrome.titleVisibilityHidden")
     check(tabs_chrome.get("titlebarSeparatorStyleNone") is True,
           "tabs.chrome.titlebarSeparatorStyleNone", str(tabs_chrome.get("titlebarSeparatorStyle")))
-    check(tabs_chrome.get("titlebarHeight", -1) == 28,
+    check(tab_safe_top > 28, "tabs.chrome.safeAreaTop", str(tab_safe_top))
+    check(tabs_chrome.get("titlebarHeight", -1) == tab_safe_top,
           "tabs.chrome.titlebarHeight", str(tabs_chrome.get("titlebarHeight")))
-    check(tabs_chrome.get("sidebarDragHandlesAcceptMouse") is True,
-          "tabs.chrome.sidebarDragHandlesAcceptMouse")
+    check(tabs_chrome.get("webViewTop", -1) >= tab_safe_top - 0.5,
+          "tabs.chrome.webViewClearOfTabBar", str(tabs_chrome.get("webViewTop")))
     check(tabs_chrome.get("contentDragRegionAcceptsMouse") is True,
           "tabs.chrome.contentDragRegionAcceptsMouse")
-    check(tabs_chrome.get("sidebarFirstRowTop", -1) >= 28 + 34,
-          "tabs.chrome.sidebarFirstRowClearOfTabBar",
-          str(tabs_chrome.get("sidebarFirstRowTop")))
-    check(tabs_chrome.get("sidebarDragRegionHeight", -1) == 28,
-          "tabs.chrome.sidebarDragRegionHeight",
-          str(tabs_chrome.get("sidebarDragRegionHeight")))
     check(tabs_chrome.get("title") in opened.get("titles", []),
           "tabs.chrome.filenameStillAvailable", str(tabs_chrome.get("title")))
 
@@ -364,8 +404,8 @@ def main():
           "tabs.perTabTitles", str([entry.get("title") for entry in per_tab]))
     check(all(entry["tabTitle"] == entry["title"] for entry in per_tab),
           "tabs.tabTitleMatchesWindowTitle", str(per_tab))
-    check(all(entry["sidebarHeadings"] > 0 for entry in per_tab),
-          "tabs.perTabSidebars", str(per_tab))
+    check(all(entry["outlineHeadingCount"] > 0 for entry in per_tab),
+          "tabs.perTabOutlineHeadings", str(per_tab))
 
     scroll = tabs["scroll"]
     check(scroll.get("before", 0) > 0, "tabs.scrollBefore", str(scroll.get("before")))
@@ -379,8 +419,8 @@ def main():
           "tabs.localLink.titles", str(local_link.get("titles")))
     check(local_link.get("documentWindowCount") == 1, "tabs.localLink.sameWindow",
           str(local_link.get("documentWindowCount")))
-    check(all(entry["sidebarHeadings"] > 0 for entry in local_link.get("perTab", [])),
-          "tabs.localLink.perTabSidebars", str(local_link.get("perTab")))
+    check(all(entry["outlineHeadingCount"] > 0 for entry in local_link.get("perTab", [])),
+          "tabs.localLink.perTabOutlineHeadings", str(local_link.get("perTab")))
 
     # ---- Real-screen tab bar capture ----------------------------------------
     check(tabs_screen.get("mode") == "tabs-screen", "tabsScreen.mode",
@@ -388,10 +428,11 @@ def main():
     screen_chrome = tabs_screen.get("chrome", {})
     check(tabs_screen.get("windowNumber", -1) > 0, "tabsScreen.windowNumber",
           str(tabs_screen.get("windowNumber")))
-    check(screen_chrome.get("tabBarVisible") is True, "tabsScreen.tabBarVisible")
-    check(screen_chrome.get("sidebarWidth", -1) >= 180, "tabsScreen.sidebarWidth",
-          str(screen_chrome.get("sidebarWidth")))
-    check_document_tab_strip(screen_chrome, "tabsScreen.chrome", 3)
+    check(screen_chrome.get("nativeTabBarVisible") is True, "tabsScreen.nativeTabBarVisible")
+    check(screen_chrome.get("contentSafeAreaTop", -1) > 28,
+          "tabsScreen.safeAreaTop", str(screen_chrome.get("contentSafeAreaTop")))
+    check(screen_chrome.get("webViewTop", -1) >= screen_chrome.get("contentSafeAreaTop", 0) - 0.5,
+          "tabsScreen.webViewClearOfTabBar", str(screen_chrome.get("webViewTop")))
 
     detach = tabs["detach"]
     check(detach.get("tabCountAfterDetach") == 2, "tabs.detach.tabCount",
@@ -414,27 +455,22 @@ def main():
     check(tab_close.get("tabCountAfterClose") == 1, "tabs.close.tabCount",
           str(tab_close.get("tabCountAfterClose")))
     check(tab_close.get("tabBarVisibleAfterClose") is False,
-          "tabs.close.tabBarHidden",
+          "tabs.close.nativeTabBarHidden",
           str(tab_close.get("tabBarVisibleAfterClose")))
     check(close_chrome.get("fullSizeContentView") is True,
           "tabs.close.fullSizeContentView")
-    check(close_chrome.get("tabBarVisible") is False, "tabs.close.customTabBarHidden",
+    check(close_chrome.get("tabBarVisible") is False, "tabs.close.tabBarVisible",
           str(close_chrome.get("tabBarVisible")))
     check(close_chrome.get("nativeTabBarVisible") is False,
-          "tabs.close.nativeTabBarHidden", str(close_chrome.get("nativeTabBarVisible")))
-    check(close_chrome.get("tabBarHeight") == 0, "tabs.close.tabBarHeight",
-          str(close_chrome.get("tabBarHeight")))
+          "tabs.close.nativeTabBarHiddenAlias", str(close_chrome.get("nativeTabBarVisible")))
     check(close_chrome.get("contentSafeAreaTop") == 28,
           "tabs.close.safeAreaTop", str(close_chrome.get("contentSafeAreaTop")))
     check(close_chrome.get("titlebarHeight") == 28,
           "tabs.close.titlebarHeight", str(close_chrome.get("titlebarHeight")))
-    check(close_chrome.get("sidebarHeaderTop", -1) >= 28,
-          "tabs.close.sidebarHeaderTop", str(close_chrome.get("sidebarHeaderTop")))
     check(close_chrome.get("webViewTop", -1) >= 28,
           "tabs.close.webViewTop", str(close_chrome.get("webViewTop")))
-    check(close_chrome.get("sidebarDragRegionHeight", -1) == 28,
-          "tabs.close.sidebarDragRegionHeight",
-          str(close_chrome.get("sidebarDragRegionHeight")))
+    check(close_chrome.get("contentDragRegionAcceptsMouse") is True,
+          "tabs.close.contentDragRegionAcceptsMouse")
 
     # ---- Real LaunchServices (Finder double-click style) open events --------
     check(live_tabs["documentCount"] == 2, "liveTabs.documentCount",
@@ -446,17 +482,38 @@ def main():
     check(live_tabs["tabCount"] == 2, "liveTabs.tabCount", str(live_tabs["tabCount"]))
     check(live_tabs["titles"] == ["other.md", "test.md"], "liveTabs.titles",
           str(live_tabs["titles"]))
-    check(live_tabs["tabBarVisible"] is True, "liveTabs.tabBarVisible")
-    check(live_tabs.get("nativeTabBarVisible") is False, "liveTabs.nativeTabBarHidden",
+    check(live_tabs["tabBarVisible"] is True, "liveTabs.nativeTabBarVisible")
+    check(live_tabs.get("nativeTabBarVisible") is True, "liveTabs.nativeTabBarVisibleAlias",
           str(live_tabs.get("nativeTabBarVisible")))
-    check_document_tab_strip(live_tabs.get("chrome", {}), "liveTabs.chrome", 2)
+    check(live_tabs.get("chrome", {}).get("contentSafeAreaTop", -1) > 28,
+          "liveTabs.chrome.safeAreaTop",
+          str(live_tabs.get("chrome", {}).get("contentSafeAreaTop")))
     live_per_tab = live_tabs.get("perTab", [])
     check({entry["title"] for entry in live_per_tab} == {"test.md", "other.md"},
           "liveTabs.perTabTitles", str([entry.get("title") for entry in live_per_tab]))
     check(all(entry["tabTitle"] == entry["title"] for entry in live_per_tab),
           "liveTabs.tabTitleMatchesWindowTitle", str(live_per_tab))
-    check(all(entry["sidebarHeadings"] > 0 for entry in live_per_tab),
-          "liveTabs.perTabSidebars", str(live_per_tab))
+    check(all(entry["outlineHeadingCount"] > 0 for entry in live_per_tab),
+          "liveTabs.perTabOutlineHeadings", str(live_per_tab))
+
+    # ---- Real-screen single-window and outline-panel captures ---------------
+    for label, capture in (("outlineScreen", outline_screen), ("singleScreen", single_screen)):
+        check(capture.get("mode") == "window", f"{label}.mode", str(capture.get("mode")))
+        capture_chrome = capture.get("chrome", {})
+        check(capture.get("windowNumber", -1) > 0, f"{label}.windowNumber",
+              str(capture.get("windowNumber")))
+        check(capture_chrome.get("contentSafeAreaTop") == 28,
+              f"{label}.safeAreaTop", str(capture_chrome.get("contentSafeAreaTop")))
+        check(capture_chrome.get("nativeTabBarVisible") is False,
+              f"{label}.nativeTabBarHidden",
+              str(capture_chrome.get("nativeTabBarVisible")))
+        capture_outline = load_outline(capture.get("outline"))
+        check_outline_headings(capture_outline, label)
+    check_outline_headings(load_outline(outline_screen.get("outline")),
+                           "outlineScreen.expanded")
+    screenshot_outline = load_outline(outline_screen.get("outline"))
+    check(screenshot_outline.get("expanded") is True, "outlineScreen.panelExpanded")
+    check(screenshot_outline.get("panelVisible") is True, "outlineScreen.panelVisible")
 
     # ---- Artifacts, CSS, Info.plist ----------------------------------------
     expected_css_hash = "5e33b8e7a578e0b5f93467ff7882c4314d1fcad9d3863ea0656151f0300477b6"
@@ -477,6 +534,7 @@ def main():
         "Contents/Resources/vendor/marked.min.js",
         "Contents/Resources/vendor/highlight.min.js",
         "Contents/Resources/vendor/mermaid.min.js",
+        "Contents/Resources/quiet-light.css",
         "Contents/Resources/viewer.html",
         "Contents/Resources/viewer.css",
         "Contents/Resources/viewer.js",
@@ -484,10 +542,11 @@ def main():
         path = app / relative
         check(path.is_file() and path.stat().st_size > 0, f"bundle.{relative}")
 
-    for png in ("01-top.png", "02-mermaid.png", "03-section.png", "04-sidebar.png",
+    for png in ("01-top.png", "02-mermaid.png", "03-section.png",
                 "05-headerless-window.png", "06-headerless-content.png",
                 "07-headerless-tabs-window.png", "08-headerless-tabs-content.png",
-                "09-real-tabs-window.png"):
+                "09-real-tabs-window.png", "10-outline-panel.png",
+                "11-single-window.png"):
         path = out / png
         check(path.is_file() and path.stat().st_size > 1000, f"snapshot.{png}")
 
