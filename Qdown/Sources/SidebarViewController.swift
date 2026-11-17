@@ -22,6 +22,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     private let outlineView = NSOutlineView()
     private let scrollView = NSScrollView()
+    private let topDragView = WindowDragView()
+    private let header = WindowDragView()
     private let emptyLabel = NSTextField(labelWithString: "見出しがありません")
     private var roots: [HeadingNode] = []
 
@@ -33,7 +35,10 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         root.wantsLayer = true
         root.layer?.backgroundColor = Self.sidebarColor.cgColor
 
-        let header = NSView(frame: .zero)
+        topDragView.translatesAutoresizingMaskIntoConstraints = false
+        topDragView.wantsLayer = true
+        topDragView.layer?.backgroundColor = Self.sidebarColor.cgColor
+
         header.translatesAutoresizingMaskIntoConstraints = false
         header.wantsLayer = true
         header.layer?.backgroundColor = Self.sidebarColor.cgColor
@@ -89,12 +94,21 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         emptyLabel.textColor = NSColor(srgbRed: 0.467, green: 0.467, blue: 0.467, alpha: 1.0)
         emptyLabel.alignment = .center
 
+        root.addSubview(topDragView)
         root.addSubview(header)
         root.addSubview(scrollView)
         root.addSubview(emptyLabel)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: root.topAnchor),
+            // The sidebar background runs under the transparent titlebar; the
+            // header and first row stay below the traffic lights and the tab
+            // bar. The strip above the header is an explicit drag region.
+            topDragView.topAnchor.constraint(equalTo: root.topAnchor),
+            topDragView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            topDragView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            topDragView.bottomAnchor.constraint(equalTo: header.topAnchor),
+
+            header.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             header.heightAnchor.constraint(equalToConstant: 34),
@@ -159,6 +173,60 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         outlineView.reloadData()
         outlineView.expandItem(nil, expandChildren: true)
         emptyLabel.isHidden = total > 0
+    }
+
+    // MARK: - Headerless chrome geometry
+
+    /// Height of the blank strip above the "見出し" header. It covers exactly
+    /// the titlebar (and the tab bar when visible) and doubles as the window
+    /// drag handle.
+    var dragRegionHeight: CGFloat {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        return topDragView.frame.height
+    }
+
+    /// True when the blank titlebar strip and the header both act as window
+    /// drag handles (`mouseDownCanMoveWindow` and hit testing agree).
+    var dragHandlesAcceptMouse: Bool {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        guard topDragView.frame.height > 0 else { return false }
+        let stripPoint = NSPoint(x: topDragView.bounds.midX, y: topDragView.bounds.midY)
+        let headerPoint = NSPoint(x: header.bounds.midX, y: header.bounds.midY)
+        return topDragView.mouseDownCanMoveWindow
+            && topDragView.hitTest(stripPoint) === topDragView
+            && header.mouseDownCanMoveWindow
+            && header.hitTest(headerPoint) === header
+    }
+
+    /// Distance from the window's top edge to the sidebar header.
+    var headerTopInWindow: CGFloat {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        guard let window = view.window, let content = window.contentView else { return -1 }
+        return Self.topDistance(of: header, in: content)
+    }
+
+    /// Distance from the window's top edge to the first heading row. This must
+    /// stay below the traffic lights / tab bar.
+    var firstRowTopInWindow: CGFloat {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        guard let window = view.window, let content = window.contentView else { return -1 }
+        guard outlineView.numberOfRows > 0 else {
+            return headerTopInWindow + header.bounds.height
+        }
+        return Self.topDistance(of: outlineView.rect(ofRow: 0), from: outlineView, in: content)
+    }
+
+    private static func topDistance(of view: NSView, in content: NSView) -> CGFloat {
+        topDistance(of: view.bounds, from: view, in: content)
+    }
+
+    private static func topDistance(of rect: NSRect, from view: NSView, in content: NSView) -> CGFloat {
+        let converted = view.convert(rect, to: content)
+        return content.bounds.height - converted.maxY
     }
 
     // MARK: - Outline view
@@ -275,5 +343,18 @@ final class HeadingRowView: NSTableRowView {
 
     override var interiorBackgroundStyle: NSView.BackgroundStyle {
         .normal
+    }
+}
+
+
+/// An otherwise empty view whose drag moves the window. Standard AppKit
+/// `mouseDownCanMoveWindow` behaviour keeps the chrome headerless while still
+/// letting the user reposition the window by its sidebar top area.
+final class WindowDragView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0, bounds.contains(point) else { return nil }
+        return self
     }
 }

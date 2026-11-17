@@ -41,7 +41,9 @@ rm -f "$OUT"/render.json "$OUT"/render-fallback.json "$OUT"/security.json \
       "$OUT"/smoke-tabs.stdout "$OUT"/smoke-tabs.stderr "$OUT"/tabs.json \
       "$OUT"/smoke-live-tabs.stdout "$OUT"/smoke-live-tabs.stderr "$OUT"/live-tabs.json \
       "$OUT"/01-top.png "$OUT"/02-mermaid.png "$OUT"/03-section.png \
-      "$OUT"/04-sidebar.png
+      "$OUT"/04-sidebar.png "$OUT"/05-headerless-window.png \
+      "$OUT"/06-headerless-content.png "$OUT"/07-headerless-tabs-window.png \
+      "$OUT"/08-headerless-tabs-content.png
 
 kill_qdown() {
   pkill -x Qdown 2>/dev/null || true
@@ -102,7 +104,9 @@ run_qdown security \
 run_qdown smoke-two \
   QDOWNTEST_MODE=smoke \
   QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md' \
-  QDOWNTEST_SIDEBAR_SNAPSHOT=build/test-output/04-sidebar.png
+  QDOWNTEST_SIDEBAR_SNAPSHOT=build/test-output/04-sidebar.png \
+  QDOWNTEST_WINDOW_SNAPSHOT=build/test-output/05-headerless-window.png \
+  QDOWNTEST_CONTENT_SNAPSHOT=build/test-output/06-headerless-content.png
 
 # True cross-process zoom persistence: write the preference outside the app,
 # then launch a fresh process that must read it back without seeding.
@@ -121,7 +125,9 @@ run_qdown smoke-link \
 run_qdown smoke-tabs \
   QDOWNTEST_MODE=tabs \
   QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md' \
-  QDOWNTEST_JSON=build/test-output/tabs.json
+  QDOWNTEST_JSON=build/test-output/tabs.json \
+  QDOWNTEST_WINDOW_SNAPSHOT=build/test-output/07-headerless-tabs-window.png \
+  QDOWNTEST_CONTENT_SNAPSHOT=build/test-output/08-headerless-tabs-content.png
 
 # Real LaunchServices/Mac Finder path: the app is started directly so it can
 # read its test environment, then `open -a` delivers ordinary `odoc` open

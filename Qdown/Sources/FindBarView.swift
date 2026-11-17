@@ -173,6 +173,7 @@ final class ContentViewController: NSViewController {
 
     let webView: MarkdownWebView
     let findBar = FindBarView()
+    private let topDragView = WindowDragView()
 
     private var findQuery = ""
 
@@ -190,6 +191,9 @@ final class ContentViewController: NSViewController {
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor(srgbRed: 0.941, green: 0.941, blue: 0.969, alpha: 1.0).cgColor
 
+        topDragView.translatesAutoresizingMaskIntoConstraints = false
+        topDragView.wantsLayer = true
+        topDragView.layer?.backgroundColor = NSColor(srgbRed: 0.941, green: 0.941, blue: 0.969, alpha: 1.0).cgColor
         findBar.translatesAutoresizingMaskIntoConstraints = false
         webView.translatesAutoresizingMaskIntoConstraints = false
         findBar.heightAnchor.constraint(equalToConstant: 40).isActive = true
@@ -203,10 +207,20 @@ final class ContentViewController: NSViewController {
         stack.spacing = 0
         stack.distribution = .fill
         stack.detachesHiddenViews = true
+        root.addSubview(topDragView)
         root.addSubview(stack)
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: root.topAnchor),
+            // The page background reaches the window's top edge, while the
+            // find bar and WebView start below the titlebar/tab bar so neither
+            // is hidden by window chrome. The strip above the stack is a drag
+            // handle for moving the window.
+            topDragView.topAnchor.constraint(equalTo: root.topAnchor),
+            topDragView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            topDragView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            topDragView.bottomAnchor.constraint(equalTo: stack.topAnchor),
+
+            stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -232,6 +246,34 @@ final class ContentViewController: NSViewController {
         }
 
         view = root
+    }
+
+    // MARK: - Headerless chrome geometry
+
+    /// True when the blank strip above the page is a window drag handle.
+    var dragRegionAcceptsMouse: Bool {
+        guard view.window != nil else { return false }
+        view.layoutSubtreeIfNeeded()
+        guard topDragView.frame.height > 0 else { return false }
+        let point = NSPoint(x: topDragView.bounds.midX, y: topDragView.bounds.midY)
+        return topDragView.mouseDownCanMoveWindow && topDragView.hitTest(point) === topDragView
+    }
+
+    /// Distance from the window's top edge to the WebView. The page background
+    /// exists above it, but no document text is allowed under the titlebar or
+    /// the tab bar.
+    var webViewTopInWindow: CGFloat {
+        guard let window = view.window, let content = window.contentView else { return -1 }
+        view.layoutSubtreeIfNeeded()
+        let rect = webView.convert(webView.bounds, to: content)
+        return content.bounds.height - rect.maxY
+    }
+
+    var findBarTopInWindow: CGFloat {
+        guard let window = view.window, let content = window.contentView else { return -1 }
+        view.layoutSubtreeIfNeeded()
+        let rect = findBar.convert(findBar.bounds, to: content)
+        return content.bounds.height - rect.maxY
     }
 
     var isFindVisible: Bool {

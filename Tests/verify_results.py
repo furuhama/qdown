@@ -166,6 +166,37 @@ def main():
           str(states[1]["sidebarHeadings"]))
     check(states[0]["pageZoom"] == 1.25, "smoke.zoomPersisted", str(states[0]["pageZoom"]))
 
+    # ---- Headerless chrome (single window, tab bar hidden) -----------------
+    chrome = states[0]
+    check(chrome.get("fullSizeContentView") is True, "chrome.fullSizeContentView")
+    check(chrome.get("titlebarAppearsTransparent") is True,
+          "chrome.titlebarAppearsTransparent")
+    check(chrome.get("titleVisibilityHidden") is True, "chrome.titleVisibilityHidden",
+          str(chrome.get("titleVisibilityHidden")))
+    check(chrome.get("titlebarSeparatorStyleNone") is True,
+          "chrome.titlebarSeparatorStyleNone", str(chrome.get("titlebarSeparatorStyle")))
+    safe_top = chrome.get("contentSafeAreaTop", -1)
+    check(safe_top == 28, "chrome.contentSafeAreaTop", str(safe_top))
+    check(chrome.get("titlebarHeight", -1) == safe_top, "chrome.titlebarHeight",
+          str(chrome.get("titlebarHeight")))
+    check(chrome.get("sidebarDragRegionHeight", -1) == safe_top,
+          "chrome.sidebarDragRegionHeight",
+          f"{chrome.get('sidebarDragRegionHeight')} != {safe_top}")
+    check(chrome.get("sidebarDragHandlesAcceptMouse") is True,
+          "chrome.sidebarDragHandlesAcceptMouse")
+    check(chrome.get("contentDragRegionAcceptsMouse") is True,
+          "chrome.contentDragRegionAcceptsMouse")
+    check(chrome.get("sidebarHeaderTop", -1) >= safe_top, "chrome.sidebarHeaderTop",
+          str(chrome.get("sidebarHeaderTop")))
+    check(chrome.get("sidebarFirstRowTop", -1) >= safe_top + 34, "chrome.sidebarFirstRowTop",
+          str(chrome.get("sidebarFirstRowTop")))
+    check(chrome.get("webViewTop", -1) >= safe_top, "chrome.webViewTop",
+          str(chrome.get("webViewTop")))
+    check(chrome.get("findBarTop", -1) >= safe_top, "chrome.findBarTop",
+          str(chrome.get("findBarTop")))
+    check(chrome.get("title") == "test.md", "chrome.filenameStillAvailable",
+          str(chrome.get("title")))
+
     extras = states[-1]
     check(extras["zoomIn"] == 1.5, "smoke.zoomIn", str(extras["zoomIn"]))
     check(extras["actualSize"] == 1, "smoke.actualSize", str(extras["actualSize"]))
@@ -224,6 +255,41 @@ def main():
     check(opened["documentWindowCount"] == 1, "tabs.documentWindowCount",
           str(opened["documentWindowCount"]))
     check(opened["tabBarVisible"] is True, "tabs.tabBarVisible")
+
+    # The native tab bar occupies more titlebar space. Content and sidebar rows
+    # must be pushed below it; the WebView top must be at or below the tab bar's
+    # bottom edge (the safe-area inset), never underneath it.
+    tabs_chrome = opened.get("chrome", {})
+    tab_safe_top = tabs_chrome.get("contentSafeAreaTop", -1)
+    check(tabs_chrome.get("tabBarVisible") is True, "tabs.chrome.tabBarVisible")
+    check(tabs_chrome.get("fullSizeContentView") is True, "tabs.chrome.fullSizeContentView")
+    check(tabs_chrome.get("titlebarAppearsTransparent") is True,
+          "tabs.chrome.titlebarAppearsTransparent")
+    check(tabs_chrome.get("titleVisibilityHidden") is True,
+          "tabs.chrome.titleVisibilityHidden")
+    check(tabs_chrome.get("titlebarSeparatorStyleNone") is True,
+          "tabs.chrome.titlebarSeparatorStyleNone", str(tabs_chrome.get("titlebarSeparatorStyle")))
+    check(tab_safe_top > 28, "tabs.chrome.safeAreaTop", str(tab_safe_top))
+    check(tabs_chrome.get("titlebarHeight", -1) == tab_safe_top,
+          "tabs.chrome.titlebarHeight", str(tabs_chrome.get("titlebarHeight")))
+    check(tabs_chrome.get("webViewTop", -1) >= tab_safe_top - 0.5,
+          "tabs.chrome.webViewClearOfTabBar", str(tabs_chrome.get("webViewTop")))
+    check(tabs_chrome.get("sidebarDragHandlesAcceptMouse") is True,
+          "tabs.chrome.sidebarDragHandlesAcceptMouse")
+    check(tabs_chrome.get("contentDragRegionAcceptsMouse") is True,
+          "tabs.chrome.contentDragRegionAcceptsMouse")
+    check(tabs_chrome.get("sidebarHeaderTop", -1) >= tab_safe_top - 0.5,
+          "tabs.chrome.sidebarHeaderClearOfTabBar",
+          str(tabs_chrome.get("sidebarHeaderTop")))
+    check(tabs_chrome.get("sidebarFirstRowTop", -1) >= tab_safe_top + 34 - 0.5,
+          "tabs.chrome.sidebarFirstRowClearOfTabBar",
+          str(tabs_chrome.get("sidebarFirstRowTop")))
+    check(tabs_chrome.get("sidebarDragRegionHeight", -1) == tab_safe_top,
+          "tabs.chrome.sidebarDragRegionHeight",
+          str(tabs_chrome.get("sidebarDragRegionHeight")))
+    check(tabs_chrome.get("title") in opened.get("titles", []),
+          "tabs.chrome.filenameStillAvailable", str(tabs_chrome.get("title")))
+
     per_tab = opened.get("perTab", [])
     check({entry["title"] for entry in per_tab} == {"test.md", "other.md"},
           "tabs.perTabTitles", str([entry.get("title") for entry in per_tab]))
@@ -307,7 +373,9 @@ def main():
         path = app / relative
         check(path.is_file() and path.stat().st_size > 0, f"bundle.{relative}")
 
-    for png in ("01-top.png", "02-mermaid.png", "03-section.png", "04-sidebar.png"):
+    for png in ("01-top.png", "02-mermaid.png", "03-section.png", "04-sidebar.png",
+                "05-headerless-window.png", "06-headerless-content.png",
+                "07-headerless-tabs-window.png", "08-headerless-tabs-content.png"):
         path = out / png
         check(path.is_file() and path.stat().st_size > 1000, f"snapshot.{png}")
 

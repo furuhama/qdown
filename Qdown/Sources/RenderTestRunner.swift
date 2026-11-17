@@ -295,6 +295,20 @@ enum RenderTestRunner {
                     extras["sidebarSnapshot"] = first.saveSidebarSnapshot(to: sidebarSnapshot) ?? ""
                 }
 
+                // Headerless chrome evidence: one capture of the whole window
+                // frame (traffic lights included) and one of the content view
+                // (sidebar + page background reaching the top edge).
+                if let windowSnapshot = setting("QDOWNTEST_WINDOW_SNAPSHOT",
+                                                flag: "--smoke-window-snapshot",
+                                                in: arguments) {
+                    extras["windowSnapshot"] = first.saveWindowSnapshot(to: windowSnapshot) ?? ""
+                }
+                if let contentSnapshot = setting("QDOWNTEST_CONTENT_SNAPSHOT",
+                                                 flag: "--smoke-content-snapshot",
+                                                 in: arguments) {
+                    extras["contentSnapshot"] = first.saveContentSnapshot(to: contentSnapshot) ?? ""
+                }
+
                 first.zoomIn(nil)
                 extras["zoomIn"] = first.debugState()["pageZoom"] ?? 0
                 first.actualSize(nil)
@@ -474,6 +488,23 @@ enum RenderTestRunner {
                 "tabBarVisible": hostWindow.tabGroup?.isTabBarVisible ?? false,
                 "selectedTitle": hostWindow.tabGroup?.selectedWindow?.title ?? "",
             ]
+
+            // Chrome geometry with the native tab bar on screen. The window
+            // and content snapshots are the visual evidence that the tab bar
+            // does not cover the sidebar header, sidebar rows, or the WebView.
+            if let hostController = hostWindow.windowController as? DocumentWindowController {
+                opened["chrome"] = hostController.debugState()
+                if let windowSnapshot = setting("QDOWNTEST_WINDOW_SNAPSHOT",
+                                                flag: "--tabs-window-snapshot",
+                                                in: arguments) {
+                    opened["windowSnapshot"] = hostController.saveWindowSnapshot(to: windowSnapshot) ?? ""
+                }
+                if let contentSnapshot = setting("QDOWNTEST_CONTENT_SNAPSHOT",
+                                                 flag: "--tabs-content-snapshot",
+                                                 in: arguments) {
+                    opened["contentSnapshot"] = hostController.saveContentSnapshot(to: contentSnapshot) ?? ""
+                }
+            }
 
             var perTab: [[String: Any]] = []
             for window in initialWindows {

@@ -28,7 +28,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 780),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable,
+                        .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -38,7 +39,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 520, height: 400)
         window.backgroundColor = NSColor(srgbRed: 0.941, green: 0.941, blue: 0.969, alpha: 1.0)
-        window.titlebarAppearsTransparent = false
+        // Headerless chrome: the content view (sidebar + page background) runs
+        // all the way to the top edge, the titlebar is transparent, and the
+        // filename lives in the native tab bar instead of the window title.
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        window.isMovableByWindowBackground = false
 
         super.init(window: window)
 
@@ -252,12 +259,30 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func saveSidebarSnapshot(to path: String) -> String? {
-        let sidebarView = sidebarViewController.view
-        sidebarView.layoutSubtreeIfNeeded()
-        guard let bitmap = sidebarView.bitmapImageRepForCachingDisplay(in: sidebarView.bounds) else {
+        saveSnapshot(of: sidebarViewController.view, to: path)
+    }
+
+    /// Captures the whole window frame, including the transparent titlebar and
+    /// the traffic-light buttons. This is the visual proof that no opaque gray
+    /// header row is drawn above the content.
+    func saveWindowSnapshot(to path: String) -> String? {
+        guard let window, let themeFrame = window.contentView?.superview else { return nil }
+        return saveSnapshot(of: themeFrame, to: path)
+    }
+
+    /// Captures the content view only (sidebar + page); unlike the theme-frame
+    /// snapshot this does not depend on private AppKit titlebar rendering.
+    func saveContentSnapshot(to path: String) -> String? {
+        guard let contentView = window?.contentView else { return nil }
+        return saveSnapshot(of: contentView, to: path)
+    }
+
+    private func saveSnapshot(of view: NSView, to path: String) -> String? {
+        view.layoutSubtreeIfNeeded()
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
             return nil
         }
-        sidebarView.cacheDisplay(in: sidebarView.bounds, to: bitmap)
+        view.cacheDisplay(in: view.bounds, to: bitmap)
         guard let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
         let url = URL(fileURLWithPath: path).standardizedFileURL
         do {
@@ -271,7 +296,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func debugState() -> [String: Any] {
-        [
+        var state: [String: Any] = [
             "title": window?.title ?? "",
             "tabTitle": window?.tab.title ?? "",
             "sidebarHeadings": sidebarViewController.headingCount,
@@ -283,7 +308,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             "windowCount": NSApp.windows.filter { $0.isVisible }.count,
             "tabCount": window?.tabbedWindows?.count ?? 1,
             "tabTitles": window?.tabbedWindows?.map { $0.title } ?? (window.map { [$0.title] } ?? []),
+            "fullSizeContentView": window?.styleMask.contains(.fullSizeContentView) ?? false,
+            "titlebarAppearsTransparent": window?.titlebarAppearsTransparent ?? false,
+            "titleVisibilityHidden": window?.titleVisibility == .hidden,
+            "titlebarSeparatorStyleNone": window.map { $0.titlebarSeparatorStyle.rawValue == 1 } ?? false,
+            "titlebarHeight": window.map { $0.frame.height - $0.contentLayoutRect.height } ?? 0,
+            "contentSafeAreaTop": window?.contentView?.safeAreaInsets.top ?? 0,
+            "sidebarSafeAreaTop": sidebarViewController.view.safeAreaInsets.top,
+            "sidebarDragRegionHeight": sidebarViewController.dragRegionHeight,
+            "sidebarDragHandlesAcceptMouse": sidebarViewController.dragHandlesAcceptMouse,
+            "contentDragRegionAcceptsMouse": contentPane.dragRegionAcceptsMouse,
+            "sidebarHeaderTop": sidebarViewController.headerTopInWindow,
+            "sidebarFirstRowTop": sidebarViewController.firstRowTopInWindow,
+            "webViewTop": contentPane.webViewTopInWindow,
+            "findBarTop": contentPane.findBarTopInWindow,
+            "tabBarVisible": window?.tabGroup?.isTabBarVisible ?? false,
+            "titlebarSeparatorStyle": window.map { Int($0.titlebarSeparatorStyle.rawValue) } ?? -1,
         ]
+        if let window {
+            state["windowFrame"] = NSStringFromRect(window.frame)
+        }
+        return state
     }
 
     // MARK: - NSWindowDelegate

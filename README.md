@@ -15,6 +15,13 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
 - **Native window tabs.** Open several Markdown files as tabs in one window
   using macOS's standard `NSWindow` tabbing. Each tab keeps its own document,
   heading sidebar, find state, zoom, and scroll position.
+- **Headerless window.** The titlebar is transparent (`fullSizeContentView` +
+  `titlebarAppearsTransparent`), the filename title is hidden and shown by the
+  tab bar instead, and the sidebar/page background reaches the window's top
+  edge. The traffic-light buttons remain, and the blank strip above the sidebar
+  header plus the strip beside the page are draggable window regions. Sidebar
+  rows and page content start below the titlebar and native tab bar, so nothing
+  is hidden by window chrome.
 - **Relative links open in a new tab.** A relative Markdown link opens as a new
   tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
@@ -105,10 +112,21 @@ runs the following checks:
   commands
 - Real LaunchServices (`open -a`, Finder-style) open events produce one window
   with two tabs
+- Headerless chrome: `fullSizeContentView`, transparent titlebar, hidden title,
+  no titlebar separator, content and sidebar rows below the traffic lights, and
+  the sidebar top strip exposed as a draggable region
+- Headerless chrome with the native tab bar visible: the safe-area inset grows
+  from 28 to 56 points and the WebView/sidebar rows start below the tab bar
 - Blocking of external images, iframes, `javascript:` links, and raw `<script>`
 - `lipo -info` confirmation of the arm64 + x86_64 slices
 
-Results are written to `build/test-output/` as JSON and PNG snapshots.
+Results are written to `build/test-output/` as JSON and PNG snapshots. The
+headerless-chrome screenshots are `05-headerless-window.png` /
+`06-headerless-content.png` (no tabs) and `07-headerless-tabs-window.png` /
+`08-headerless-tabs-content.png` (window with the native tab bar open). The in-process
+snapshots cannot draw AppKit's tab bar itself; the tab-bar geometry is asserted
+instead via `tabBarVisible`, the titlebar height, and the content safe-area
+inset.
 
 ### Verification harness
 
@@ -159,6 +177,8 @@ Common environment variables:
 | `QDOWNTEST_FIND` / `QDOWNTEST_FALLBACK` | Search term / `<mark>` fallback |
 | `QDOWNTEST_FILES` | Files to open in the smoke and tab tests (newline-separated) |
 | `QDOWNTEST_SIDEBAR_SNAPSHOT` | Output path for the sidebar PNG |
+| `QDOWNTEST_WINDOW_SNAPSHOT` | Output path for a whole-window PNG (theme frame, traffic lights included) |
+| `QDOWNTEST_CONTENT_SNAPSHOT` | Output path for a content-view PNG (sidebar + page, no titlebar) |
 | `QDOWNTEST_ZOOM_READ_ONLY` | `1` reads the UserDefaults zoom value without modifying it |
 | `QDOWNTEST_LINK` | `1` verifies that a relative link opens a new tab in the same window |
 | `QDOWNTEST_EXPECT_COUNT` | Documents expected from LaunchServices open events (`live-tabs`) |
