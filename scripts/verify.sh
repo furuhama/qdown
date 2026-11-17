@@ -130,11 +130,12 @@ run_qdown smoke-tabs \
   QDOWNTEST_WINDOW_SNAPSHOT=build/test-output/07-headerless-tabs-window.png \
   QDOWNTEST_CONTENT_SNAPSHOT=build/test-output/08-headerless-tabs-content.png
 
-# The native window tab bar is drawn by the window server, so it is absent
-# from the in-process snapshots above. The tabs harness writes the window
-# number and keeps the app alive while we record the window with the system
-# screencapture tool; Tests/verify_tab_geometry.py then checks the tab strip
-# starts at the window's left edge and that content starts below it.
+# Qdown draws its own tab strip, so it is present in the in-process snapshots
+# above. The real-screen capture is still the authoritative proof that the
+# strip starts at the split position and the window's top edge. The tabs
+# harness writes the window number and keeps the app alive while we record the
+# window with the system screencapture tool; Tests/verify_tab_geometry.py then
+# checks the strip geometry and that content starts below it.
 echo "==> tabs real-screen geometry (screencapture)"
 kill_qdown
 rm -f "$OUT"/tabs-screen.json "$OUT"/tabs-screen.stdout "$OUT"/tabs-screen.stderr \

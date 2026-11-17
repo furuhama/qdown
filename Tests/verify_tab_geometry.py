@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Verify the native tab bar geometry on a real screen capture.
+"""Verify Qdown's sidebar-priority tab strip on a real screen capture.
 
-The native NSWindow tab bar is drawn by the window server, so it is absent
-from the app's in-process `cacheDisplay` snapshots. This script checks the
-real `screencapture -l` image produced by scripts/verify.sh:
+Qdown draws the tab strip itself inside the document column, so unlike the old
+native titlebar tab bar it is visible in a `screencapture -l` image. The layout
+contract is:
 
-  * the tab bar row is at the top of the window,
-  * the selected tab starts at the window's left edge (the regression was a
-    tab strip inset by the sidebar width), and
-  * the sidebar/WebView start below the tab bar.
+  * the sidebar owns the window's full height (traffic lights on top),
+  * the tab strip starts exactly at the split position (never over the
+    sidebar) and at the window's top edge (no blank band above the tabs),
+  * every tab is on one row with the same height,
+  * document content starts below the strip.
 
-Only the standard library is required. Pillow is used when available; when it
-is not, the PNG is converted to BMP with the macOS `sips` tool and decoded
+Both the geometry metadata written by the tabs harness and the actual pixels
+are checked. Only the standard library is required. Pillow is used when
+available; otherwise the PNG is converted to BMP with `sips` and decoded
 manually.
 """
 import json
@@ -99,15 +101,12 @@ def parse_frame(text):
     return tuple(float(value) for value in match.groups())
 
 
-def is_neutral(pixel):
-    red, green, blue = pixel
-    return max(pixel) - min(pixel) <= 3 and 234 <= red <= 250
+def distance(a, b):
+    return max(abs(a[0] - b[0]), abs(a[1] - b[1]), abs(a[2] - b[2]))
 
 
-def is_tab_like(pixel):
-    """Light, slightly blue page/sidebar background under a translucent tab."""
-    red, green, blue = pixel
-    return red >= 225 and green >= 225 and blue >= 225 and (blue - red) >= 3
+def close(a, b, tolerance=6):
+    return distance(a, b) <= tolerance
 
 
 def main():
@@ -122,14 +121,22 @@ def main():
         raise SystemExit(f"missing metadata: {metadata_path}")
 
     metadata = json.loads(metadata_path.read_text())
-    chrome = metadata.get("chrome") or metadata.get("opened", {}).get("chrome") or {}
+    chrome = metadata.get("chrome") or {}
     frame = parse_frame(metadata.get("windowFrame") or chrome.get("windowFrame"))
     if not frame:
         raise SystemExit("no windowFrame in metadata")
-    window_x, window_y, window_width, window_height = frame
+    _, _, window_width, window_height = frame
+
+    tab_left = float(chrome.get("tabBarLeft", -1))
+    tab_top = float(chrome.get("tabBarTop", -1))
+    tab_height = float(chrome.get("tabBarHeight", -1))
+    tab_width = float(chrome.get("tabBarWidth", -1))
     sidebar_width = float(chrome.get("sidebarWidth", -1))
-    content_top = float(chrome.get("contentSafeAreaTop", -1))
+    sidebar_right = float(chrome.get("sidebarRight", -1))
+    content_left = float(chrome.get("contentLeft", -1))
+    webview_top = float(chrome.get("webViewTop", -1))
     sidebar_header_top = float(chrome.get("sidebarHeaderTop", -1))
+    tabs = chrome.get("tabBarTabs") or []
 
     image = load_image(screenshot)
     scale = image.width / window_width
@@ -137,91 +144,108 @@ def main():
     check(abs(image.height - window_height * scale) <= 3,
           "realTabs.captureSize",
           f"{image.width}x{image.height} for {window_width:g}x{window_height:g}pt")
+
+    # ---- Metadata geometry --------------------------------------------------
     check(chrome.get("tabBarVisible") is True, "realTabs.tabBarVisible",
           str(chrome.get("tabBarVisible")))
-    check(sidebar_width >= 180, "realTabs.sidebarWidth", f"{sidebar_width:g}pt")
+    check(chrome.get("nativeTabBarVisible") is False,
+          "realTabs.nativeTabBarHidden", str(chrome.get("nativeTabBarVisible")))
+    check(abs(tab_top) <= 0.5, "realTabs.tabBarAtWindowTop", f"top={tab_top:g}pt")
+    check(abs(tab_left - sidebar_right) <= 0.5, "realTabs.tabBarLeftAtSplit",
+          f"left={tab_left:g}pt, sidebarRight={sidebar_right:g}pt")
+    check(abs(content_left - (sidebar_right + 5)) <= 0.5,
+          "realTabs.contentColumnAfterDivider",
+          f"contentLeft={content_left:g}pt, sidebarRight={sidebar_right:g}pt")
+    check(tab_left >= sidebar_width - 0.5, "realTabs.tabBarNeverOverSidebar",
+          f"left={tab_left:g}pt, sidebar={sidebar_width:g}pt")
+    check(abs((tab_left + tab_width) - window_width) <= 0.5,
+          "realTabs.tabBarSpansDocumentColumn",
+          f"right={tab_left + tab_width:g}pt, window={window_width:g}pt")
+    check(abs(tab_height - 34) <= 0.5, "realTabs.tabBarHeight", f"{tab_height:g}pt")
+    check(len(tabs) == 3, "realTabs.tabCount", f"{len(tabs)} tabs")
+    check(bool(tabs) and all(abs(tab.get("top", -99)) <= 0.5 for tab in tabs),
+          "realTabs.allTabsAtWindowTop", str([tab.get("top") for tab in tabs]))
+    check(bool(tabs) and all(abs(tab.get("height", -99) - tab_height) <= 0.5 for tab in tabs),
+          "realTabs.allTabsSameHeight", str([tab.get("height") for tab in tabs]))
+    check(bool(tabs) and all(tab.get("left", -99) >= sidebar_right - 0.5 for tab in tabs),
+          "realTabs.allTabsInsideDocumentColumn",
+          str([tab.get("left") for tab in tabs]))
+    check(webview_top >= tab_height - 0.5, "realTabs.contentBelowTabBar",
+          f"webViewTop={webview_top:g}pt, tabBarHeight={tab_height:g}pt")
+    check(sidebar_header_top == 28, "realTabs.sidebarFullHeight",
+          f"sidebarHeaderTop={sidebar_header_top:g}pt")
 
-    # The tab bar is the horizontal band whose right half is the neutral gray
-    # of the unselected tabs/empty tab bar. The headerless page/sidebar colors
-    # are slightly blue and therefore not neutral.
-    sample_fractions = (0.60, 0.70, 0.80, 0.90, 0.97)
-    qualifying = []
-    for y in range(2, int(image.height * 0.35)):
-        neutral = sum(1 for fraction in sample_fractions
-                      if is_neutral(image.pixel(image.width * fraction, y)))
-        if neutral >= 4:
-            qualifying.append(y)
+    # ---- Pixel geometry -----------------------------------------------------
+    # `screencapture` draws a few black pixels of window outline at the very
+    # edge, so sample slightly inside the window.
+    sidebar_color = image.pixel(10, image.height * 0.55)
+    page_color = image.pixel(image.width - 20, image.height - 20)
+    bar_color = image.pixel(image.width - 20, 3)
 
-    runs = []
-    for y in qualifying:
-        if runs and y == runs[-1][1] + 1:
-            runs[-1][1] = y
-        else:
-            runs.append([y, y])
-    # Text and tab separators can interrupt a few rows in the middle of the
-    # band, so join runs separated by a small gap before measuring it.
-    merged = []
-    for run in runs:
-        if merged and run[0] - merged[-1][1] <= int(8 * scale):
-            merged[-1][1] = run[1]
-        else:
-            merged.append(run)
-    runs = [run for run in merged
-            if 18 * scale <= (run[1] - run[0] + 1) <= 40 * scale]
-    check(bool(runs), "realTabs.tabBarBandFound",
-          f"{len(runs)} candidate band(s)")
-    if not runs:
-        finish()
-        return
-    band_top, band_bottom = min(runs, key=lambda run: run[0])
-    band_height_pt = (band_bottom - band_top + 1) / scale
-    band_top_pt = band_top / scale
-    band_bottom_pt = (band_bottom + 1) / scale
+    # The top edge over the document column is the tab strip, not page color
+    # and not an empty titlebar band.
+    check(distance(bar_color, page_color) > 6,
+          "realTabs.topEdgeIsTabBarNotPage",
+          f"top={bar_color}, page={page_color}")
+    check(distance(image.pixel(image.width - 20, 3), page_color) > 6,
+          "realTabs.noBlankBandAboveTabs",
+          f"y=3 -> {image.pixel(image.width - 20, 3)}")
 
-    check(18 <= band_top_pt <= 34, "realTabs.tabBarNearTop",
-          f"top={band_top_pt:.1f}pt")
-    check(22 <= band_height_pt <= 34, "realTabs.tabBarHeight",
-          f"{band_height_pt:.1f}pt")
+    # Scan one row below the traffic lights. Everything left of the split must
+    # still be sidebar; the first non-sidebar pixel must be the tab strip's
+    # left edge.
+    sample_y = int(30 * scale)
+    split_px = int(round(sidebar_right * scale))
+    left_pixels = [image.pixel(x, sample_y) for x in range(0, max(1, split_px - 2))]
+    sidebar_like = sum(1 for pixel in left_pixels if close(pixel, sidebar_color, 7))
+    check(sidebar_like >= len(left_pixels) * 0.97,
+          "realTabs.noTabOverSidebar",
+          f"{sidebar_like}/{len(left_pixels)} sidebar pixels")
 
-    # The selected tab is translucent over the headerless sidebar/page
-    # background, so it is tab-like (blue-tinted) rather than neutral gray.
-    # Before the fix the first tab started at the sidebar edge, leaving the
-    # gray strip above the sidebar with no tab in it.
-    y_values = range(band_top + int(6 * scale), band_bottom - int(6 * scale) + 1)
-    y_count = max(1, len(y_values))
-    column_hits = []
+    transition = None
     for x in range(0, image.width):
-        hits = sum(1 for y in y_values if is_tab_like(image.pixel(x, y)))
-        column_hits.append(hits / y_count)
-    selected_left = None
-    run_start = None
-    for x, fraction in enumerate(column_hits):
-        if fraction >= 0.8:
-            if run_start is None:
-                run_start = x
-            elif x - run_start >= 10 * scale:
-                selected_left = run_start
-                break
-        else:
-            run_start = None
-    if selected_left is None:
-        selected_left = 0 if column_hits and column_hits[0] >= 0.8 else None
+        if distance(image.pixel(x, sample_y), sidebar_color) > 7:
+            transition = x
+            break
+    check(transition is not None, "realTabs.tabBarLeftEdgeFound")
+    if transition is not None:
+        check(abs(transition / scale - sidebar_right) <= 2.0,
+              "realTabs.tabBarLeftEdgeAtSplit",
+              f"edge={transition / scale:.1f}pt, split={sidebar_right:g}pt")
 
-    check(selected_left is not None, "realTabs.selectedTabFound")
-    if selected_left is not None:
-        selected_left_pt = selected_left / scale
-        check(selected_left_pt <= 6, "realTabs.selectedTabStartsAtLeftEdge",
-              f"left={selected_left_pt:.1f}pt")
-        check(selected_left_pt < sidebar_width,
-              "realTabs.tabSpansScaleSidebar",
-              f"tab left={selected_left_pt:.1f}pt, sidebar={sidebar_width:g}pt")
+    # At the right edge the strip changes into the page exactly at the tab
+    # strip's bottom edge.
+    transition_y = None
+    right_x = image.width - 20
+    # Require a short run of page pixels so the anti-aliased window outline at
+    # the very top is not mistaken for the start of the page.
+    for y in range(0, int(image.height * 0.25)):
+        if all(close(image.pixel(right_x, y + offset), page_color, 3)
+               for offset in range(0, 5)):
+            transition_y = y
+            break
+    check(transition_y is not None, "realTabs.pageBelowTabBarFound")
+    if transition_y is not None:
+        check(abs(transition_y / scale - tab_height) <= 3.0,
+              "realTabs.pageStartsBelowTabBar",
+              f"pageTop={transition_y / scale:.1f}pt, tabBarHeight={tab_height:g}pt")
 
-    check(content_top >= band_bottom_pt - 1,
-          "realTabs.contentBelowTabBar",
-          f"contentTop={content_top:g}pt, tabBarBottom={band_bottom_pt:.1f}pt")
-    check(sidebar_header_top >= band_bottom_pt - 1,
-          "realTabs.sidebarBelowTabBar",
-          f"sidebarHeaderTop={sidebar_header_top:g}pt, tabBarBottom={band_bottom_pt:.1f}pt")
+    # Every tab starts at the same top edge and ends at the same bottom edge,
+    # both in metadata and in the actual pixels.
+    top_ok = True
+    bottom_ok = True
+    for index, tab in enumerate(tabs):
+        center_x = int((tab["left"] + tab["width"] / 2) * scale)
+        top_pixel = image.pixel(center_x, max(1, int(2 * scale)))
+        if close(top_pixel, page_color, 5) or close(top_pixel, sidebar_color, 5):
+            top_ok = False
+        below_pixel = image.pixel(center_x, int((tab_height + 5) * scale))
+        if not close(below_pixel, page_color, 8):
+            bottom_ok = False
+        print(f"    tab[{index}] center={center_x/scale:.1f}pt "
+              f"top={top_pixel} below={below_pixel}")
+    check(top_ok, "realTabs.allTabsShareTopRow")
+    check(bottom_ok, "realTabs.allTabsShareBottomEdge")
 
     finish()
 

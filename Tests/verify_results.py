@@ -3,6 +3,7 @@
 import hashlib
 import json
 import plistlib
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +27,77 @@ def load_json_with_prefix(path, prefix):
     if index < 0:
         raise SystemExit(f"no JSON in {path}")
     return json.loads(text[index:])
+
+
+def parse_window_size(text):
+    """Parse an AppKit `{1120, 808}` size string."""
+    match = re.match(r"\{\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\}", text or "")
+    if not match:
+        return None
+    return float(match.group(1)), float(match.group(2))
+
+
+def check_document_tab_strip(chrome, prefix, expected_count):
+    """Assert the sidebar-priority custom tab strip geometry.
+
+    * the strip starts at the split position (never over the sidebar),
+    * its top is the window's top edge (no blank band above the tabs),
+    * every tab is on the same single row with the same height.
+    """
+    check(chrome.get("tabBarVisible") is True, f"{prefix}.tabBarVisible")
+    check(chrome.get("nativeTabBarVisible") is False,
+          f"{prefix}.nativeTabBarHidden", str(chrome.get("nativeTabBarVisible")))
+    check(chrome.get("tabBarTabCount") == expected_count,
+          f"{prefix}.tabBarTabCount", str(chrome.get("tabBarTabCount")))
+
+    left = chrome.get("tabBarLeft", -1)
+    top = chrome.get("tabBarTop", -1)
+    height = chrome.get("tabBarHeight", -1)
+    width = chrome.get("tabBarWidth", -1)
+    content_left = chrome.get("contentLeft", -1)
+    sidebar_right = chrome.get("sidebarRight", -1)
+    sidebar_width = chrome.get("sidebarWidth", -1)
+    window_size = parse_window_size(chrome.get("windowSize"))
+    window_width = window_size[0] if window_size else -1
+
+    check(abs(top) <= 0.5, f"{prefix}.tabBarAtWindowTop", f"top={top:g}")
+    check(abs(left - sidebar_right) <= 0.5, f"{prefix}.tabBarLeftAtSplit",
+          f"left={left:g}, sidebarRight={sidebar_right:g}")
+    check(abs(content_left - (sidebar_right + 5)) <= 0.5,
+          f"{prefix}.contentColumnAfterDivider",
+          f"contentLeft={content_left:g}, sidebarRight={sidebar_right:g}")
+    check(abs(sidebar_right - sidebar_width) <= 0.5, f"{prefix}.splitAtSidebarWidth",
+          f"sidebarRight={sidebar_right:g}, sidebarWidth={sidebar_width:g}")
+    check(left >= sidebar_width - 0.5, f"{prefix}.tabBarNeverOverSidebar",
+          f"left={left:g}, sidebar={sidebar_width:g}")
+    check(abs(height - 34) <= 0.5, f"{prefix}.tabBarHeight", f"{height:g}pt")
+    check(window_width > 0 and abs((left + width) - window_width) <= 0.5,
+          f"{prefix}.tabBarSpansDocumentColumn",
+          f"right={left + width:g}, windowWidth={window_width:g}")
+    check(chrome.get("contentSafeAreaTop") == 28,
+          f"{prefix}.nativeTabBarRemoved", str(chrome.get("contentSafeAreaTop")))
+    check(chrome.get("sidebarHeaderTop") == 28,
+          f"{prefix}.sidebarFullHeight", str(chrome.get("sidebarHeaderTop")))
+    check(chrome.get("webViewTop", -1) >= height - 0.5,
+          f"{prefix}.contentBelowTabBar",
+          f"webViewTop={chrome.get('webViewTop')}, tabBarHeight={height:g}")
+
+    tabs = chrome.get("tabBarTabs", [])
+    check(len(tabs) == expected_count, f"{prefix}.tabFramesCount", str(len(tabs)))
+    check(bool(tabs) and all(abs(tab.get("top", -99)) <= 0.5 for tab in tabs),
+          f"{prefix}.allTabsAtWindowTop",
+          str([tab.get("top") for tab in tabs]))
+    check(bool(tabs) and all(abs(tab.get("height", -99) - height) <= 0.5 for tab in tabs),
+          f"{prefix}.allTabsSameHeight",
+          str([tab.get("height") for tab in tabs]))
+    check(bool(tabs) and all(tab.get("left", -99) >= sidebar_right - 0.5 for tab in tabs),
+          f"{prefix}.allTabsInsideDocumentColumn",
+          str([tab.get("left") for tab in tabs]))
+    if window_width > 0:
+        check(bool(tabs) and all(tab.get("left", 0) + tab.get("width", 0)
+                                 <= window_width + 0.5 for tab in tabs),
+              f"{prefix}.allTabsWithinWindow",
+              str([(tab.get("left"), tab.get("width")) for tab in tabs]))
 
 
 def main():
@@ -256,13 +328,15 @@ def main():
     check(opened["documentWindowCount"] == 1, "tabs.documentWindowCount",
           str(opened["documentWindowCount"]))
     check(opened["tabBarVisible"] is True, "tabs.tabBarVisible")
+    check(opened.get("nativeTabBarVisible") is False, "tabs.nativeTabBarHidden",
+          str(opened.get("nativeTabBarVisible")))
 
-    # The native tab bar occupies more titlebar space. Content and sidebar rows
-    # must be pushed below it; the WebView top must be at or below the tab bar's
-    # bottom edge (the safe-area inset), never underneath it.
+    # Qdown draws its own tab strip in the document column. The sidebar keeps
+    # the full window height (traffic lights on top), the strip starts exactly
+    # at the split position and at the window's top edge, and all tabs share a
+    # single row. The native titlebar tab bar must never come back.
     tabs_chrome = opened.get("chrome", {})
-    tab_safe_top = tabs_chrome.get("contentSafeAreaTop", -1)
-    check(tabs_chrome.get("tabBarVisible") is True, "tabs.chrome.tabBarVisible")
+    check_document_tab_strip(tabs_chrome, "tabs.chrome", 2)
     check(tabs_chrome.get("fullSizeContentView") is True, "tabs.chrome.fullSizeContentView")
     check(tabs_chrome.get("titlebarAppearsTransparent") is True,
           "tabs.chrome.titlebarAppearsTransparent")
@@ -270,22 +344,16 @@ def main():
           "tabs.chrome.titleVisibilityHidden")
     check(tabs_chrome.get("titlebarSeparatorStyleNone") is True,
           "tabs.chrome.titlebarSeparatorStyleNone", str(tabs_chrome.get("titlebarSeparatorStyle")))
-    check(tab_safe_top > 28, "tabs.chrome.safeAreaTop", str(tab_safe_top))
-    check(tabs_chrome.get("titlebarHeight", -1) == tab_safe_top,
+    check(tabs_chrome.get("titlebarHeight", -1) == 28,
           "tabs.chrome.titlebarHeight", str(tabs_chrome.get("titlebarHeight")))
-    check(tabs_chrome.get("webViewTop", -1) >= tab_safe_top - 0.5,
-          "tabs.chrome.webViewClearOfTabBar", str(tabs_chrome.get("webViewTop")))
     check(tabs_chrome.get("sidebarDragHandlesAcceptMouse") is True,
           "tabs.chrome.sidebarDragHandlesAcceptMouse")
     check(tabs_chrome.get("contentDragRegionAcceptsMouse") is True,
           "tabs.chrome.contentDragRegionAcceptsMouse")
-    check(tabs_chrome.get("sidebarHeaderTop", -1) >= tab_safe_top - 0.5,
-          "tabs.chrome.sidebarHeaderClearOfTabBar",
-          str(tabs_chrome.get("sidebarHeaderTop")))
-    check(tabs_chrome.get("sidebarFirstRowTop", -1) >= tab_safe_top + 34 - 0.5,
+    check(tabs_chrome.get("sidebarFirstRowTop", -1) >= 28 + 34,
           "tabs.chrome.sidebarFirstRowClearOfTabBar",
           str(tabs_chrome.get("sidebarFirstRowTop")))
-    check(tabs_chrome.get("sidebarDragRegionHeight", -1) == tab_safe_top,
+    check(tabs_chrome.get("sidebarDragRegionHeight", -1) == 28,
           "tabs.chrome.sidebarDragRegionHeight",
           str(tabs_chrome.get("sidebarDragRegionHeight")))
     check(tabs_chrome.get("title") in opened.get("titles", []),
@@ -323,9 +391,7 @@ def main():
     check(screen_chrome.get("tabBarVisible") is True, "tabsScreen.tabBarVisible")
     check(screen_chrome.get("sidebarWidth", -1) >= 180, "tabsScreen.sidebarWidth",
           str(screen_chrome.get("sidebarWidth")))
-    check(screen_chrome.get("contentSafeAreaTop", -1) > 28,
-          "tabsScreen.contentBelowTabBar",
-          str(screen_chrome.get("contentSafeAreaTop")))
+    check_document_tab_strip(screen_chrome, "tabsScreen.chrome", 3)
 
     detach = tabs["detach"]
     check(detach.get("tabCountAfterDetach") == 2, "tabs.detach.tabCount",
@@ -352,6 +418,12 @@ def main():
           str(tab_close.get("tabBarVisibleAfterClose")))
     check(close_chrome.get("fullSizeContentView") is True,
           "tabs.close.fullSizeContentView")
+    check(close_chrome.get("tabBarVisible") is False, "tabs.close.customTabBarHidden",
+          str(close_chrome.get("tabBarVisible")))
+    check(close_chrome.get("nativeTabBarVisible") is False,
+          "tabs.close.nativeTabBarHidden", str(close_chrome.get("nativeTabBarVisible")))
+    check(close_chrome.get("tabBarHeight") == 0, "tabs.close.tabBarHeight",
+          str(close_chrome.get("tabBarHeight")))
     check(close_chrome.get("contentSafeAreaTop") == 28,
           "tabs.close.safeAreaTop", str(close_chrome.get("contentSafeAreaTop")))
     check(close_chrome.get("titlebarHeight") == 28,
@@ -375,6 +447,9 @@ def main():
     check(live_tabs["titles"] == ["other.md", "test.md"], "liveTabs.titles",
           str(live_tabs["titles"]))
     check(live_tabs["tabBarVisible"] is True, "liveTabs.tabBarVisible")
+    check(live_tabs.get("nativeTabBarVisible") is False, "liveTabs.nativeTabBarHidden",
+          str(live_tabs.get("nativeTabBarVisible")))
+    check_document_tab_strip(live_tabs.get("chrome", {}), "liveTabs.chrome", 2)
     live_per_tab = live_tabs.get("perTab", [])
     check({entry["title"] for entry in live_per_tab} == {"test.md", "other.md"},
           "liveTabs.perTabTitles", str([entry.get("title") for entry in live_per_tab]))

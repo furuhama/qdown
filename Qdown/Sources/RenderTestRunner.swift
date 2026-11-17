@@ -493,7 +493,9 @@ enum RenderTestRunner {
                 "titles": initialTitles,
                 "documentWindowCount": documentWindowCount(),
                 "visibleDocumentWindowCount": visibleDocumentWindowCount(),
-                "tabBarVisible": hostWindow.tabGroup?.isTabBarVisible ?? false,
+                "tabBarVisible": (hostWindow.windowController as? DocumentWindowController)?
+                    .debugState()["tabBarVisible"] as? Bool ?? false,
+                "nativeTabBarVisible": hostWindow.tabGroup?.isTabBarVisible ?? false,
                 "selectedTitle": hostWindow.tabGroup?.selectedWindow?.title ?? "",
             ]
 
@@ -658,9 +660,12 @@ enum RenderTestRunner {
                     $0.isVisible && $0.windowController is DocumentWindowController
                 }
                 tabClose["tabCountAfterClose"] = remaining?.tabGroup?.windows.count ?? 1
-                tabClose["tabBarVisibleAfterClose"] = remaining?.tabGroup?.isTabBarVisible ?? false
                 if let controller = remaining?.windowController as? DocumentWindowController {
                     tabClose["chrome"] = controller.debugState()
+                    tabClose["tabBarVisibleAfterClose"] =
+                        controller.debugState()["tabBarVisible"] as? Bool ?? false
+                } else {
+                    tabClose["tabBarVisibleAfterClose"] = false
                 }
             }
 
@@ -738,7 +743,14 @@ enum RenderTestRunner {
                 "visibleDocumentWindowCount": visibleDocumentWindowCount(),
                 "tabCount": groupWindows.count,
                 "titles": titles,
-                "tabBarVisible": host?.tabGroup?.isTabBarVisible ?? false,
+                "tabBarVisible": host.flatMap { window in
+                    (window.windowController as? DocumentWindowController)?
+                        .debugState()["tabBarVisible"] as? Bool
+                } ?? false,
+                "nativeTabBarVisible": host?.tabGroup?.isTabBarVisible ?? false,
+                "chrome": host.flatMap { window in
+                    (window.windowController as? DocumentWindowController)?.debugState()
+                } ?? [:],
                 "perTab": perTab,
                 "documentURLs": documents.compactMap { $0.fileURL?.lastPathComponent },
             ]

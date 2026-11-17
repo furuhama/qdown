@@ -173,7 +173,12 @@ final class ContentViewController: NSViewController {
 
     let webView: MarkdownWebView
     let findBar = FindBarView()
+    let tabBar = DocumentTabBarView()
     private let topDragView = WindowDragView()
+    private var stackTopToSafeArea: NSLayoutConstraint!
+    private var stackTopBelowTabBar: NSLayoutConstraint!
+    private(set) var tabBarVisible = false
+    private(set) var tabBarTabCount = 0
 
     private var findQuery = ""
 
@@ -196,6 +201,7 @@ final class ContentViewController: NSViewController {
         topDragView.layer?.backgroundColor = NSColor(srgbRed: 0.941, green: 0.941, blue: 0.969, alpha: 1.0).cgColor
         findBar.translatesAutoresizingMaskIntoConstraints = false
         webView.translatesAutoresizingMaskIntoConstraints = false
+        tabBar.translatesAutoresizingMaskIntoConstraints = false
         findBar.heightAnchor.constraint(equalToConstant: 40).isActive = true
         webView.setContentHuggingPriority(.defaultLow, for: .vertical)
         webView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -209,18 +215,33 @@ final class ContentViewController: NSViewController {
         stack.detachesHiddenViews = true
         root.addSubview(topDragView)
         root.addSubview(stack)
+        // The tab strip is added last so it sits on top of the drag strip and
+        // can receive clicks while occupying the window's top edge.
+        root.addSubview(tabBar)
+
+        stackTopToSafeArea = stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor)
+        stackTopBelowTabBar = stack.topAnchor.constraint(equalTo: tabBar.bottomAnchor)
+        stackTopToSafeArea.isActive = true
+        tabBar.isHidden = true
 
         NSLayoutConstraint.activate([
             // The page background reaches the window's top edge, while the
-            // find bar and WebView start below the titlebar/tab bar so neither
-            // is hidden by window chrome. The strip above the stack is a drag
-            // handle for moving the window.
+            // find bar and WebView start below the titlebar/tab strip. When
+            // tabs are visible the stack starts at the bottom of Qdown's own
+            // tab strip instead of the titlebar safe area.
             topDragView.topAnchor.constraint(equalTo: root.topAnchor),
             topDragView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             topDragView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             topDragView.bottomAnchor.constraint(equalTo: stack.topAnchor),
 
-            stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+            tabBar.topAnchor.constraint(equalTo: root.topAnchor),
+            // Extend over the divider hit area so the strip's left edge is the
+            // split position (the sidebar's right edge), not 5pt to its right.
+            tabBar.leadingAnchor.constraint(equalTo: root.leadingAnchor,
+                                            constant: -DocumentSplitView.dividerHitWidth),
+            tabBar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            tabBar.heightAnchor.constraint(equalToConstant: DocumentTabBarView.preferredHeight),
+
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -229,6 +250,13 @@ final class ContentViewController: NSViewController {
             webView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
+
+        tabBar.onSelect = { [weak self] window in
+            self?.selectTab(window)
+        }
+        tabBar.onClose = { window in
+            window.performClose(nil)
+        }
 
         findBar.isHidden = true
         findBar.onQueryChange = { [weak self] query in
@@ -254,9 +282,93 @@ final class ContentViewController: NSViewController {
     var dragRegionAcceptsMouse: Bool {
         guard view.window != nil else { return false }
         view.layoutSubtreeIfNeeded()
+        if tabBarVisible {
+            // The tab strip itself is interactive; its empty area performs a
+            // window drag in `DocumentTabBarView.mouseDown`.
+            return tabBar.frame.height > 0
+        }
         guard topDragView.frame.height > 0 else { return false }
         let point = NSPoint(x: topDragView.bounds.midX, y: topDragView.bounds.midY)
         return topDragView.mouseDownCanMoveWindow && topDragView.hitTest(point) === topDragView
+    }
+
+    // MARK: - Document tab strip
+
+    /// Called by `DocumentWindowController.refreshTabChrome` for every window
+    /// in the native tab group, so switching tabs always presents a tab strip
+    /// with the same tab list and selection.
+    func updateTabBar(windows: [NSWindow], selected: NSWindow, visible: Bool) {
+        _ = view
+        tabBarTabCount = windows.count
+        tabBar.update(windows: windows, selected: selected)
+        guard tabBarVisible != visible else {
+            view.layoutSubtreeIfNeeded()
+            return
+        }
+        tabBarVisible = visible
+        tabBar.isHidden = !visible
+        if visible {
+            stackTopToSafeArea.isActive = false
+            stackTopBelowTabBar.isActive = true
+        } else {
+            stackTopBelowTabBar.isActive = false
+            stackTopToSafeArea.isActive = true
+        }
+        view.layoutSubtreeIfNeeded()
+    }
+
+    private func selectTab(_ window: NSWindow) {
+        if let group = view.window?.tabGroup, group.windows.contains(window) {
+            group.selectedWindow = window
+        }
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Distance from the window's top edge to the top of the tab strip. Must
+    /// be 0 when tabs are shown: no blank band above the tabs.
+    var tabBarTopInWindow: CGFloat {
+        tabBarFrameInWindow.map { contentTopDistance(of: $0) } ?? -1
+    }
+
+    var tabBarLeftInWindow: CGFloat {
+        tabBarFrameInWindow?.minX ?? -1
+    }
+
+    var tabBarWidthInWindow: CGFloat {
+        tabBarFrameInWindow?.width ?? -1
+    }
+
+    var tabBarHeightInWindow: CGFloat {
+        tabBarVisible ? tabBar.frame.height : 0
+    }
+
+    var tabBarTabsForTesting: [[String: Any]] {
+        guard tabBarVisible, let content = view.window?.contentView else { return [] }
+        view.layoutSubtreeIfNeeded()
+        return tabBar.tabFramesForTesting.map { rect in
+            let converted = tabBar.convert(rect, to: content)
+            return [
+                "top": content.bounds.height - converted.maxY,
+                "height": converted.height,
+                "left": converted.minX,
+                "width": converted.width,
+            ]
+        }
+    }
+
+    var tabBarTabCountForTesting: Int { tabBarTabCount }
+
+    private var tabBarFrameInWindow: NSRect? {
+        guard tabBarVisible, let window = view.window, let content = window.contentView else {
+            return nil
+        }
+        view.layoutSubtreeIfNeeded()
+        return tabBar.convert(tabBar.bounds, to: content)
+    }
+
+    private func contentTopDistance(of rectInContent: NSRect) -> CGFloat {
+        guard let content = view.window?.contentView else { return -1 }
+        return content.bounds.height - rectInContent.maxY
     }
 
     /// Distance from the window's top edge to the WebView. The page background

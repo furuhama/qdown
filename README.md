@@ -12,20 +12,22 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
   close the find bar with Esc.
 - **Persistent zoom.** Zoom the document with ⌘+ and ⌘−, or reset to actual size
   with ⌘0. The zoom level is stored in `UserDefaults`.
-- **Native window tabs.** Open several Markdown files as tabs in one window
-  using macOS's standard `NSWindow` tabbing. Each tab keeps its own document,
-  heading sidebar, find state, zoom, and scroll position.
+- **Window tabs with a sidebar-priority layout.** Open several Markdown files
+  as tabs in one window. Qdown keeps macOS `NSWindow` tab groups (so detach,
+  merge, ⌃Tab, and LaunchServices opens still work), but draws its own
+  single-row tab strip instead of using AppKit's titlebar tab bar. The sidebar
+  is the outermost, full-height split element with the traffic lights on top;
+  the tab strip lives only in the document column, starts exactly at the split
+  position and at the window's top edge, and the page starts below it. Each tab
+  keeps its own document, heading sidebar, find state, zoom, and scroll
+  position.
 - **Headerless window.** The titlebar is transparent (`fullSizeContentView` +
-  `titlebarAppearsTransparent`), the filename title is hidden and shown by the
-  tab bar instead, and the sidebar/page background reaches the window's top
-  edge. The traffic-light buttons remain, and the blank strip above the sidebar
-  header plus the strip beside the page are draggable window regions. Sidebar
-  rows and page content start below the titlebar and native tab bar, so nothing
-  is hidden by window chrome. The sidebar/content split is a small custom pane
-  container rather than `NSSplitViewController`: AppKit treats a split view as
-  a full-height sidebar and insets the native tab bar to the content pane,
-  leaving a blank strip above the sidebar. The custom container keeps the tab
-  bar spanning the entire window while retaining the resizable divider.
+  `titlebarAppearsTransparent`) and the title is hidden. The filename is shown
+  by Qdown's tab strip. With a single document the strip is hidden entirely,
+  so the sidebar/page background still reaches the window's top edge exactly as
+  before; the traffic lights remain over the sidebar and the blank strip above
+  the sidebar header is a draggable window region. The sidebar/content split is
+  a small custom pane container rather than `NSSplitViewController`.
 - **Relative links open in a new tab.** A relative Markdown link opens as a new
   tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
@@ -109,7 +111,7 @@ runs the following checks:
 - Native window smoke tests: multiple windows, sidebar, match count, zoom
   persistence, sidebar clicks, and relative Markdown links opening as tabs in
   the same window
-- Native tab checks: two documents open into one window with two tabs whose
+- Window-tab checks: two documents open into one window with two tabs whose
   titles are the file names, per-tab sidebar state, and scroll position
   preserved across tab switches
 - Standard tab detach/merge via `NSWindow` actions, plus the Window menu tab
@@ -119,25 +121,28 @@ runs the following checks:
 - Headerless chrome: `fullSizeContentView`, transparent titlebar, hidden title,
   no titlebar separator, content and sidebar rows below the traffic lights, and
   the sidebar top strip exposed as a draggable region
-- Headerless chrome with the native tab bar visible: the safe-area inset grows
-  from 28 to 56 points and the WebView/sidebar rows start below the tab bar
-- Real-screen tab-bar geometry (the native tab bar is window-server chrome and
-  is absent from in-process snapshots): the app writes its window number and
-  holds while `screencapture` records the window, then the selected tab's left
-  edge is checked to be at the window edge (not inset by the sidebar) and the
-  sidebar header/content top is checked to be below the tab band
+- Sidebar-priority tab strip: AppKit's titlebar tab bar stays suppressed, the
+  custom strip starts exactly at the split position and at the window's top
+  edge, all tabs share one row/height, and the WebView starts below the strip
+- Closing tabs back to one document restores the headerless, tab-strip-hidden
+  layout with the original 28-point safe area and content top
+- Real-screen tab-strip geometry: the app writes its window number and holds
+  while `screencapture` records the window; the image and metadata are checked
+  for the strip's left edge at the split, top edge at the window top, one tab
+  row, and the page starting below it
 - Blocking of external images, iframes, `javascript:` links, and raw `<script>`
 - `lipo -info` confirmation of the arm64 + x86_64 slices
 
 Results are written to `build/test-output/` as JSON and PNG snapshots. The
 headerless-chrome screenshots are `05-headerless-window.png` /
 `06-headerless-content.png` (no tabs) and `07-headerless-tabs-window.png` /
-`08-headerless-tabs-content.png` (window with the native tab bar open). The
-in-process snapshots cannot draw AppKit's tab bar itself, so
-`09-real-tabs-window.png` is a real `screencapture` of the tabbed window;
-`Tests/verify_tab_geometry.py` checks the tab strip's width/position and the
-content top from that image, in addition to the `tabBarVisible` / titlebar /
-safe-area assertions on the harness JSON.
+`08-headerless-tabs-content.png` (window with Qdown's tab strip). Because the
+strip is an ordinary view it is present in those in-process snapshots, and
+`09-real-tabs-window.png` is a real `screencapture` of the tabbed window.
+`Tests/verify_tab_geometry.py` checks the strip's position, height, single-row
+layout, and the content top from the real image, in addition to the
+`tabBarVisible` / native-tab-bar-hidden / titlebar / safe-area assertions on the
+harness JSON.
 
 ### Verification harness
 
