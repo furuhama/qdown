@@ -358,6 +358,15 @@ final class ContentViewController: NSViewController {
 
     var tabBarTabCountForTesting: Int { tabBarTabCount }
 
+    /// Per-tab vertical centering metrics (title line box and close glyph)
+    /// relative to the tab row's center. Used by the real-screen geometry
+    /// check to prove the title is vertically centered, not top-aligned.
+    var tabBarTitleMetricsForTesting: [[String: Any]] {
+        guard tabBarVisible else { return [] }
+        view.layoutSubtreeIfNeeded()
+        return tabBar.titleMetricsForTesting
+    }
+
     private var tabBarFrameInWindow: NSRect? {
         guard tabBarVisible, let window = view.window, let content = window.contentView else {
             return nil

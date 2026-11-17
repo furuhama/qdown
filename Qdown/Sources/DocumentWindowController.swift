@@ -408,6 +408,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             "tabBarHeight": contentPane.tabBarHeightInWindow,
             "tabBarTabCount": contentPane.tabBarTabCount,
             "tabBarTabs": contentPane.tabBarTabsForTesting,
+            "tabBarTitleMetrics": contentPane.tabBarTitleMetricsForTesting,
             "windowNumber": window?.windowNumber ?? -1,
             "titlebarSeparatorStyle": window.map { Int($0.titlebarSeparatorStyle.rawValue) } ?? -1,
         ]
@@ -680,7 +681,9 @@ final class DocumentTabBarView: NSView {
     private var items: [DocumentTabBarItem] = []
     private weak var selectedWindow: NSWindow?
     private var tabRects: [NSRect] = []
+    private var titleRects: [NSRect] = []
     private var closeRects: [NSRect] = []
+    private var closeGlyphRects: [NSRect] = []
 
     private let barColor = NSColor(srgbRed: 0.871, green: 0.867, blue: 0.906, alpha: 1.0)
     private let unselectedTabColor = NSColor(srgbRed: 0.902, green: 0.898, blue: 0.933, alpha: 1.0)
@@ -706,12 +709,42 @@ final class DocumentTabBarView: NSView {
 
     var tabFramesForTesting: [NSRect] { tabRects }
 
+    /// Vertical metrics for the title and close glyph of every tab, relative to
+    /// the tab row's own center. The row view is flipped, but these offsets are
+    /// signed distances from the row's vertical center (positive = lower), so
+    /// they are independent of the coordinate system.
+    var titleMetricsForTesting: [[String: Any]] {
+        guard !titleRects.isEmpty else { return [] }
+        let center = bounds.midY
+        return (0..<min(items.count, titleRects.count)).map { index in
+            let title = titleRects[index]
+            let close = closeGlyphRects[index]
+            return [
+                "titleTop": title.minY,
+                "titleHeight": title.height,
+                "titleCenterY": title.midY,
+                "titleCenterOffset": title.midY - center,
+                "closeCenterY": close.midY,
+                "closeCenterOffset": close.midY - center,
+                "barCenterY": center,
+            ]
+        }
+    }
+
+    private static func titleFont(selected: Bool) -> NSFont {
+        NSFont.systemFont(ofSize: 12, weight: selected ? .medium : .regular)
+    }
+
+    private static let closeFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+
     override func layout() {
         super.layout()
         let count = items.count
         guard count > 0, bounds.width > 0 else {
             tabRects = []
+            titleRects = []
             closeRects = []
+            closeGlyphRects = []
             return
         }
         // Equal width, equal height, one single row. Very large tab counts
@@ -722,8 +755,29 @@ final class DocumentTabBarView: NSView {
         tabRects = (0..<count).map { index in
             NSRect(x: CGFloat(index) * width, y: 0, width: width, height: height)
         }
+        // Both the title and the close glyph are laid out as a single line box
+        // whose center is the tab row's center. Drawing the title into the full
+        // 34pt-tall tab rect would top-align it (the view is flipped), which is
+        // what put the title on the top edge and the close button lower.
+        titleRects = items.enumerated().map { index, item in
+            let rect = tabRects[index]
+            let font = Self.titleFont(selected: item.window === selectedWindow)
+            let size = (item.title as NSString).size(withAttributes: [.font: font])
+            let lineHeight = ceil(size.height)
+            return NSRect(x: rect.minX + 12,
+                          y: floor((rect.height - lineHeight) / 2),
+                          width: max(0, rect.width - 40),
+                          height: lineHeight)
+        }
         closeRects = tabRects.map { rect in
             NSRect(x: rect.maxX - 22, y: (height - 16) / 2, width: 16, height: 16)
+        }
+        closeGlyphRects = closeRects.map { rect in
+            let size = ("×" as NSString).size(withAttributes: [.font: Self.closeFont])
+            return NSRect(x: rect.midX - size.width / 2,
+                          y: rect.midY - size.height / 2,
+                          width: size.width,
+                          height: size.height)
         }
     }
 
@@ -748,7 +802,7 @@ final class DocumentTabBarView: NSView {
             separatorColor.setFill()
             NSRect(x: rect.maxX - 0.5, y: 0, width: 0.5, height: rect.height).fill()
 
-            let font = NSFont.systemFont(ofSize: 12, weight: selected ? .medium : .regular)
+            let font = Self.titleFont(selected: selected)
             let textColor = selected
                 ? NSColor(srgbRed: 0.20, green: 0.20, blue: 0.24, alpha: 1.0)
                 : NSColor(srgbRed: 0.37, green: 0.37, blue: 0.42, alpha: 1.0)
@@ -757,21 +811,18 @@ final class DocumentTabBarView: NSView {
                 .foregroundColor: textColor,
                 .paragraphStyle: paragraph,
             ]
-            let textRect = NSRect(x: rect.minX + 12, y: 0,
-                                  width: max(0, rect.width - 40), height: rect.height)
+            let textRect = titleRects[index]
             (item.title as NSString).draw(in: textRect, withAttributes: attributes)
 
             // A small close affordance on every tab. Clicking it closes that
             // document (and therefore removes the tab).
             let closeAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .font: Self.closeFont,
                 .foregroundColor: NSColor(srgbRed: 0.45, green: 0.42, blue: 0.53, alpha: 0.85),
             ]
-            let closeRect = closeRects[index]
-            let closeSize = ("×" as NSString).size(withAttributes: closeAttributes)
+            let glyphRect = closeGlyphRects[index]
             ("×" as NSString).draw(
-                at: NSPoint(x: closeRect.midX - closeSize.width / 2,
-                            y: closeRect.midY - closeSize.height / 2),
+                at: NSPoint(x: glyphRect.minX, y: glyphRect.minY),
                 withAttributes: closeAttributes
             )
         }

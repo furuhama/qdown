@@ -109,6 +109,25 @@ def close(a, b, tolerance=6):
     return distance(a, b) <= tolerance
 
 
+def ink_rows(image, x0, x1, y0, y1, threshold=190):
+    """Rows containing dark glyph pixels inside a light tab cell."""
+    rows = []
+    for y in range(y0, max(y0, y1)):
+        for x in range(max(0, x0), max(0, x1)):
+            red, green, blue = image.pixel(x, y)
+            if (red + green + blue) / 3.0 < threshold:
+                rows.append(y)
+                break
+    return rows
+
+
+def ink_center(image, x0, x1, y0, y1):
+    rows = ink_rows(image, x0, x1, y0, y1)
+    if not rows:
+        return None
+    return (min(rows) + max(rows)) / 2.0
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: verify_tab_geometry.py <screenshot.png> <tabs-screen.json>")
@@ -174,6 +193,30 @@ def main():
           f"webViewTop={webview_top:g}pt, tabBarHeight={tab_height:g}pt")
     check(sidebar_header_top == 28, "realTabs.sidebarFullHeight",
           f"sidebarHeaderTop={sidebar_header_top:g}pt")
+
+    # ---- Title vertical centering (view hierarchy) -------------------------
+    metrics = chrome.get("tabBarTitleMetrics") or []
+    check(bool(tabs) and len(metrics) == len(tabs),
+          "realTabs.titleMetricsPresent", f"{len(metrics)} metrics for {len(tabs)} tabs")
+    if metrics:
+        title_offsets = [float(item.get("titleCenterOffset", 999)) for item in metrics]
+        close_offsets = [float(item.get("closeCenterOffset", 999)) for item in metrics]
+        gaps = [abs(close - title) for title, close in zip(title_offsets, close_offsets)]
+        check(all(abs(offset) <= 1.0 for offset in title_offsets),
+              "realTabs.titleVerticallyCentered",
+              f"title center offsets={[round(v, 2) for v in title_offsets]}pt, "
+              f"close center offsets={[round(v, 2) for v in close_offsets]}pt")
+        check(all(gap <= 1.0 for gap in gaps),
+              "realTabs.closeCenteredWithTitle",
+              f"title/close center gaps={[round(v, 2) for v in gaps]}pt")
+        inside = all(
+            float(item.get("titleTop", -99)) >= 0
+            and float(item.get("titleTop", 999)) + float(item.get("titleHeight", 0))
+            <= tab_height + 0.5
+            for item in metrics
+        )
+        check(inside, "realTabs.titleInsideTabRow",
+              f"titleTop={[round(float(item.get('titleTop', -99)), 2) for item in metrics]}pt")
 
     # ---- Pixel geometry -----------------------------------------------------
     # `screencapture` draws a few black pixels of window outline at the very
@@ -246,6 +289,45 @@ def main():
               f"top={top_pixel} below={below_pixel}")
     check(top_ok, "realTabs.allTabsShareTopRow")
     check(bottom_ok, "realTabs.allTabsShareBottomEdge")
+
+    # ---- Title vertical centering (actual pixels) --------------------------
+    # Measure the dark glyph ink rows inside each tab: the title text must be
+    # centered on the tab row's vertical center, and the title ink must share
+    # its center with the close glyph. The bottom 4pt are excluded because the
+    # selected tab has a 2pt accent rule and every tab has a 1pt separator.
+    bar_center_px = tab_height / 2.0 * scale
+    ink_top = int(round(2 * scale))
+    ink_bottom = int(round((tab_height - 4) * scale))
+    for index, tab in enumerate(tabs):
+        tab_left = float(tab["left"])
+        tab_width = float(tab["width"])
+        title_center = ink_center(
+            image,
+            int(round((tab_left + 14) * scale)),
+            int(round((tab_left + max(0, tab_width - 40)) * scale)),
+            ink_top, ink_bottom,
+        )
+        close_center = ink_center(
+            image,
+            int(round((tab_left + tab_width - 22) * scale)),
+            int(round((tab_left + tab_width - 6) * scale)),
+            ink_top, ink_bottom,
+        )
+        if title_center is None or close_center is None:
+            check(False, f"realTabs.tab{index}.titleAndCloseInkFound",
+                  f"title={title_center}, close={close_center}")
+            continue
+        title_offset = (title_center - bar_center_px) / scale
+        close_offset = (close_center - bar_center_px) / scale
+        gap = abs(title_center - close_center) / scale
+        print(f"    tab[{index}] titleInkCenterOffset={title_offset:.2f}pt "
+              f"closeInkCenterOffset={close_offset:.2f}pt gap={gap:.2f}pt")
+        check(abs(title_offset) <= 3.0,
+              f"realTabs.tab{index}.titleInkVerticallyCentered",
+              f"offset={title_offset:.2f}pt")
+        check(gap <= 2.5,
+              f"realTabs.tab{index}.titleAndCloseSameHeight",
+              f"gap={gap:.2f}pt")
 
     finish()
 
