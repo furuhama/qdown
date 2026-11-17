@@ -12,8 +12,11 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
   close the find bar with Esc.
 - **Persistent zoom.** Zoom the document with ⌘+ and ⌘−, or reset to actual size
   with ⌘0. The zoom level is stored in `UserDefaults`.
-- **Relative links open in a new window.** A relative Markdown link opens in a
-  new Qdown window; http(s) links open in the default browser.
+- **Native window tabs.** Open several Markdown files as tabs in one window
+  using macOS's standard `NSWindow` tabbing. Each tab keeps its own document,
+  heading sidebar, find state, zoom, and scroll position.
+- **Relative links open in a new tab.** A relative Markdown link opens as a new
+  tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
   the app, so rendering requires no network access.
 - **Themed Mermaid diagrams.** Mermaid diagrams are rendered with the Quiet
@@ -48,10 +51,15 @@ xcodebuild -project Qdown.xcodeproj -scheme Qdown -configuration Release \
 ## Usage
 
 Open `.md`, `.markdown`, or `.txt` files by double-clicking them in Finder,
-using Open With, dragging them onto Qdown, or choosing File > Open….
+using Open With, dragging them onto Qdown, or choosing File > Open…. If a Qdown
+window is already open, the file joins that window as a new tab. Use File >
+New Tab… (⌘T) to pick another file, and drag a tab out (or use Window > Move Tab
+to New Window) to detach it.
 
 | Action | Shortcut |
 | --- | --- |
+| Open a file in a new tab | ⌘T |
+| Next / previous tab | ⌃Tab / ⌃⇧Tab |
 | Find in page | ⌘F |
 | Next match | ⌘G |
 | Previous match | ⇧⌘G |
@@ -60,7 +68,8 @@ using Open With, dragging them onto Qdown, or choosing File > Open….
 | Actual size | ⌘0 |
 
 Click a heading in the left sidebar to scroll to it. Relative Markdown links
-open in a new Qdown window, while http(s) links open in your default browser.
+open in a new tab in the same window, while http(s) links open in your default
+browser.
 
 The application menu also provides **Set Qdown as Default Markdown Viewer…**,
 which registers Qdown as the default application for `.md` files. Running it
@@ -87,7 +96,15 @@ runs the following checks:
 - Horizontal scrolling and Mermaid overflow at narrow widths (520px and 380px)
   and at a wide width (1400px)
 - Native window smoke tests: multiple windows, sidebar, match count, zoom
-  persistence, sidebar clicks, and relative Markdown links
+  persistence, sidebar clicks, and relative Markdown links opening as tabs in
+  the same window
+- Native tab checks: two documents open into one window with two tabs whose
+  titles are the file names, per-tab sidebar state, and scroll position
+  preserved across tab switches
+- Standard tab detach/merge via `NSWindow` actions, plus the Window menu tab
+  commands
+- Real LaunchServices (`open -a`, Finder-style) open events produce one window
+  with two tabs
 - Blocking of external images, iframes, `javascript:` links, and raw `<script>`
 - `lipo -info` confirmation of the arm64 + x86_64 slices
 
@@ -117,21 +134,34 @@ QDOWNTEST_FIND=Mermaid \
 QDOWNTEST_MODE=smoke \
 QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md' \
   build/Release/Qdown.app/Contents/MacOS/Qdown
+
+# Tab test (two documents, one window, two tabs)
+QDOWNTEST_MODE=tabs \
+QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md' \
+QDOWNTEST_JSON=build/test-output/tabs.json \
+  build/Release/Qdown.app/Contents/MacOS/Qdown
+
+# Real LaunchServices open events (start the app, then `open -a` two files)
+QDOWNTEST_MODE=live-tabs \
+QDOWNTEST_EXPECT_COUNT=2 \
+QDOWNTEST_JSON=build/test-output/live-tabs.json \
+  build/Release/Qdown.app/Contents/MacOS/Qdown
 ```
 
 Common environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `QDOWNTEST_MODE` | `render` or `smoke` |
+| `QDOWNTEST_MODE` | `render`, `smoke`, `tabs`, or `live-tabs` |
 | `QDOWNTEST_MARKDOWN` | Markdown file to render |
 | `QDOWNTEST_JSON` | Output path for the result JSON |
 | `QDOWNTEST_SNAPSHOT` / `_DIAGRAM` / `_SECTION` | PNG snapshot output paths |
 | `QDOWNTEST_FIND` / `QDOWNTEST_FALLBACK` | Search term / `<mark>` fallback |
-| `QDOWNTEST_FILES` | Files to open in the smoke test (newline-separated) |
+| `QDOWNTEST_FILES` | Files to open in the smoke and tab tests (newline-separated) |
 | `QDOWNTEST_SIDEBAR_SNAPSHOT` | Output path for the sidebar PNG |
 | `QDOWNTEST_ZOOM_READ_ONLY` | `1` reads the UserDefaults zoom value without modifying it |
-| `QDOWNTEST_LINK` | `1` verifies that a relative link opens a new window |
+| `QDOWNTEST_LINK` | `1` verifies that a relative link opens a new tab in the same window |
+| `QDOWNTEST_EXPECT_COUNT` | Documents expected from LaunchServices open events (`live-tabs`) |
 
 The legacy `--render-test` / `--smoke-test` forms are also accepted for backward
 compatibility, but should not be used in unattended runs.
@@ -145,6 +175,7 @@ Qdown/
     main.swift               # NSApplication startup (no storyboard)
     AppDelegate.swift        # Menus, file opening, default-app registration
     Document.swift           # NSDocument, text encoding detection
+    DocumentOpenCoordinator.swift # Same-window tab opening policy for all entry points
     DocumentWindowController.swift
     MarkdownWebView.swift    # WKWebView, JS bridge, drag and drop
     LocalSchemeHandler.swift # qdown://app and qdown://doc, network blocking
@@ -152,7 +183,7 @@ Qdown/
     FindBarView.swift        # Find bar and content view
     LinkRouter.swift
     ZoomStore.swift
-    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke (verification)
+    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke / tabs / live-tabs
   Resources/
     quiet-light.css          # Canonical theme; not modified
     viewer.html / viewer.css / viewer.js

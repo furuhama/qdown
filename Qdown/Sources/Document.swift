@@ -13,9 +13,23 @@ final class Document: NSDocument {
         false
     }
 
+    /// Qdown shows the plain file name (including its extension) in the window
+    /// title and in the window tab. NSDocument's default is the same, but being
+    /// explicit keeps the behaviour stable across macOS versions.
+    override var displayName: String? {
+        get { fileURL?.lastPathComponent }
+        set { }
+    }
+
     override func makeWindowControllers() {
         let controller = DocumentWindowController(document: self)
         addWindowController(controller)
+        // NSDocumentController's Finder / Apple Event open path creates the
+        // window here and may not call NSWindowController.showWindow. Joining
+        // the existing tab group at creation time covers every open path.
+        if let window = controller.window {
+            DocumentOpenCoordinator.attachToExistingWindow(window)
+        }
     }
 
     override func read(from data: Data, ofType typeName: String) throws {

@@ -23,15 +23,21 @@ enum RenderTestRunner {
     private enum TestMode {
         case render
         case smoke
+        case tabs
+        case liveTabs
     }
 
     private static var mode: TestMode? {
         if let raw = ProcessInfo.processInfo.environment["QDOWNTEST_MODE"]?.lowercased() {
             if raw == "render" { return .render }
             if raw == "smoke" { return .smoke }
+            if raw == "tabs" { return .tabs }
+            if raw == "live-tabs" { return .liveTabs }
         }
         let arguments = CommandLine.arguments
         if arguments.contains("--smoke-test") { return .smoke }
+        if arguments.contains("--tabs-test") { return .tabs }
+        if arguments.contains("--live-tabs-test") { return .liveTabs }
         if arguments.contains(where: { $0 == "--render-test" || $0.hasPrefix("--render-test=") }) {
             return .render
         }
@@ -40,17 +46,41 @@ enum RenderTestRunner {
 
     static var isTestMode: Bool { mode != nil }
 
+    /// The live-tabs harness verifies the real `application(_:open:)` path, so
+    /// it must accept LaunchServices open events while every other harness mode
+    /// ignores them.
+    static var acceptsOpenEvents: Bool { mode == .liveTabs }
+
     private static var didStart = false
 
+    @MainActor
     static func run() {
         guard !didStart else { return }
         didStart = true
+
+        // The harness builds windows directly, so keep AppKit from grouping
+        // them implicitly. Tab behaviour is exercised explicitly through
+        // DocumentOpenCoordinator and should not depend on the machine's
+        // "Prefer tabs when opening documents" preference.
+        NSWindow.allowsAutomaticWindowTabbing = false
+
+        // The legacy smoke test deliberately constructs two standalone windows
+        // to keep covering the multi-window code path. Production keeps
+        // automatic tab attachment enabled.
+        if case .smoke = mode {
+            DocumentOpenCoordinator.automaticallyTabsNewDocuments = false
+        }
+
         let arguments = CommandLine.arguments
         switch mode {
         case .smoke:
             runSmokeTest(arguments: arguments)
         case .render:
             runRenderTest(arguments: arguments)
+        case .tabs:
+            runTabTest(arguments: arguments)
+        case .liveTabs:
+            runLiveTabsTest(arguments: arguments)
         case nil:
             return
         }
@@ -235,6 +265,15 @@ enum RenderTestRunner {
         }
 
         Task { @MainActor in
+            // macOS may replay a previous session's `odoc`/restoration events
+            // for this app at launch, which would add documents the harness
+            // did not create and make window counts nondeterministic. Those
+            // are unrelated to the checks here, so close them.
+            await delay(0.5)
+            closeUnexpectedDocuments(keeping: documents)
+            await delay(0.5)
+            closeUnexpectedDocuments(keeping: documents)
+
             let ready = await waitUntil(timeout: 15) {
                 controllers.allSatisfy { ($0.debugState()["sidebarHeadings"] as? Int ?? 0) > 0 }
             }
@@ -334,11 +373,15 @@ enum RenderTestRunner {
 
                 if booleanSetting("QDOWNTEST_LINK", flag: "--smoke-link", in: arguments) {
                     first.openLinkForTesting("Tests/fixtures/other.md")
-                    await delay(1.8)
+                    await delay(2.2)
                     extras["localLinkWindowTitles"] = NSApp.windows
                         .filter { $0.isVisible }
                         .map { $0.title }
                         .sorted()
+                    extras["localLinkTabTitles"] = first.window?.tabGroup?.windows
+                        .map { $0.title }
+                        .sorted() ?? []
+                    extras["localLinkDocumentWindowCount"] = documentWindowCount()
                 }
             }
 
@@ -362,6 +405,320 @@ enum RenderTestRunner {
             write(result: result, to: nil, label: "QDOWNSMOKE")
             exit(0)
         }
+    }
+
+    // MARK: - Tabs test
+
+    /// Opens two real documents through the production coordinator and checks
+    /// that AppKit ends up with one window containing two tabs. Also exercises
+    /// per-tab state, local-link tabs, and standard detach/merge.
+    private static func runTabTest(arguments: [String]) {
+        var paths: [String] = []
+        if let environmentFiles = ProcessInfo.processInfo.environment["QDOWNTEST_FILES"], !environmentFiles.isEmpty {
+            paths = environmentFiles.split(separator: "\n").map(String.init)
+        } else if let index = arguments.firstIndex(of: "--tabs-test") {
+            var cursor = index + 1
+            while cursor < arguments.count, !arguments[cursor].hasPrefix("--") {
+                paths.append(arguments[cursor])
+                cursor += 1
+            }
+        }
+        guard paths.count >= 2 else {
+            fail("usage: QDOWNTEST_MODE=tabs "
+                 + "QDOWNTEST_FILES=$'a.md\\nb.md' Qdown")
+        }
+
+        _ = NSDocumentController.shared
+        let urls = paths.map { URL(fileURLWithPath: $0).standardizedFileURL }
+
+        Task { @MainActor in
+            var documents: [Document] = []
+            var host: NSWindow?
+
+            for url in urls {
+                let result = await openDocumentForTesting(url, host: host)
+                switch result {
+                case .success(let document):
+                    documents.append(document)
+                    if host == nil {
+                        host = document.windowControllers.first?.window
+                    }
+                case .failure(let error):
+                    fail("cannot open \(url.path): \(error.localizedDescription)")
+                }
+            }
+
+            guard let hostWindow = host else { fail("no document window was created") }
+
+            let controllers = documents.compactMap {
+                $0.windowControllers.first as? DocumentWindowController
+            }
+            let rendered = await waitUntil(timeout: 25) {
+                documents.allSatisfy { document in
+                    let headings = (document.windowControllers.first as? DocumentWindowController)?
+                        .debugState()["sidebarHeadings"] as? Int ?? 0
+                    return headings > 0
+                }
+            }
+            guard rendered else { fail("tabbed documents did not render in time") }
+            await delay(0.6)
+
+            let initialWindows = hostWindow.tabGroup?.windows ?? []
+            let initialTitles = initialWindows.map { $0.title }.sorted()
+
+            var opened: [String: Any] = [
+                "tabCount": initialWindows.count,
+                "titles": initialTitles,
+                "documentWindowCount": documentWindowCount(),
+                "visibleDocumentWindowCount": visibleDocumentWindowCount(),
+                "tabBarVisible": hostWindow.tabGroup?.isTabBarVisible ?? false,
+                "selectedTitle": hostWindow.tabGroup?.selectedWindow?.title ?? "",
+            ]
+
+            var perTab: [[String: Any]] = []
+            for window in initialWindows {
+                guard let controller = window.windowController as? DocumentWindowController else { continue }
+                let state = controller.debugState()
+                let mainHeading = await controller.evaluateForTesting(
+                    "(function(){var h=document.querySelector('#content h1');return h?h.textContent:'';})()"
+                )
+                perTab.append([
+                    "title": window.title,
+                    "tabTitle": window.tab.title ?? window.title,
+                    "sidebarHeadings": state["sidebarHeadings"] ?? 0,
+                    "mainHeading": mainHeading ?? "",
+                ])
+            }
+            opened["perTab"] = perTab
+
+            // Each tab keeps its own scroll position while another tab is shown.
+            var scroll: [String: Any] = [:]
+            if controllers.count >= 2,
+               let firstWindow = controllers[0].window,
+               let secondWindow = controllers[1].window,
+               let group = hostWindow.tabGroup {
+                group.selectedWindow = firstWindow
+                await delay(0.35)
+                _ = await controllers[0].evaluateForTesting("window.scrollTo(0, 700);")
+                await delay(0.45)
+                let before = numberValue(await controllers[0].evaluateForTesting("window.scrollY"))
+                group.selectedWindow = secondWindow
+                await delay(0.5)
+                let secondScroll = numberValue(await controllers[1].evaluateForTesting("window.scrollY"))
+                group.selectedWindow = firstWindow
+                await delay(0.5)
+                let after = numberValue(await controllers[0].evaluateForTesting("window.scrollY"))
+                scroll = [
+                    "before": before,
+                    "after": after,
+                    "secondTabScrollY": secondScroll,
+                    "preserved": abs(after - before) <= 5,
+                ]
+            }
+
+            // A relative Markdown link opens a new tab in the same window.
+            var localLink: [String: Any] = [:]
+            if let first = controllers.first {
+                first.openLinkForTesting("Tests/fixtures/security.md")
+                let linked = await waitUntil(timeout: 20) {
+                    (hostWindow.tabGroup?.windows.count ?? 0) >= 3
+                }
+                await delay(0.8)
+                let linkWindows = hostWindow.tabGroup?.windows ?? []
+                var linkTabs: [[String: Any]] = []
+                for window in linkWindows {
+                    guard let controller = window.windowController as? DocumentWindowController else { continue }
+                    let state = controller.debugState()
+                    linkTabs.append([
+                        "title": window.title,
+                        "sidebarHeadings": state["sidebarHeadings"] ?? 0,
+                    ])
+                }
+                localLink = [
+                    "rendered": linked,
+                    "tabCount": linkWindows.count,
+                    "titles": linkWindows.map { $0.title }.sorted(),
+                    "documentWindowCount": documentWindowCount(),
+                    "perTab": linkTabs,
+                ]
+            }
+
+            // Standard tab detaching and merging must keep working.
+            var detach: [String: Any] = [:]
+            if let group = hostWindow.tabGroup, group.windows.count >= 3 {
+                group.selectedWindow = group.windows.last
+                await delay(0.3)
+                group.windows.last?.moveTabToNewWindow(nil)
+                await delay(0.7)
+                detach["tabCountAfterDetach"] = group.windows.count
+                detach["documentWindowCountAfterDetach"] = documentWindowCount()
+
+                // The merge action is routed through the key window, exactly
+                // like the standard Window menu item. AppKit's merge command
+                // needs automatic tabbing enabled, which the harness normally
+                // turns off for deterministic construction.
+                NSApp.activate(ignoringOtherApps: true)
+                hostWindow.makeKeyAndOrderFront(nil)
+                await delay(0.4)
+                let automaticTabbing = NSWindow.allowsAutomaticWindowTabbing
+                NSWindow.allowsAutomaticWindowTabbing = true
+                (NSApp.keyWindow ?? hostWindow).mergeAllWindows(nil)
+                await delay(0.9)
+                NSWindow.allowsAutomaticWindowTabbing = automaticTabbing
+                detach["tabCountAfterMerge"] = hostWindow.tabGroup?.windows.count ?? 0
+                detach["documentWindowCountAfterMerge"] = documentWindowCount()
+            }
+
+            let result: [String: Any] = [
+                "mode": "tabs",
+                "files": paths,
+                "automaticTabbing": NSWindow.allowsAutomaticWindowTabbing,
+                "opened": opened,
+                "scroll": scroll,
+                "localLink": localLink,
+                "detach": detach,
+                "menuActions": menuActionSelectors(),
+                "windowTitles": controllers.compactMap { $0.window?.title },
+            ]
+            write(result: result,
+                  to: setting("QDOWNTEST_JSON", flag: "--tabs-json", in: arguments),
+                  label: "QDOWNTABS")
+            exit(0)
+        }
+    }
+
+    /// Waits for documents opened through the real `application(_:open:)`
+    /// event (LaunchServices / Finder double-click) and reports the resulting
+    /// window/tab layout.
+    private static func runLiveTabsTest(arguments: [String]) {
+        let expected = Int(ProcessInfo.processInfo.environment["QDOWNTEST_EXPECT_COUNT"] ?? "") ?? 2
+
+        Task { @MainActor in
+            // Start from a clean slate: macOS may have replayed a previous
+            // session's documents at launch, and those must not be mistaken
+            // for the files the test script opens via LaunchServices.
+            await delay(1.0)
+            let restored = NSDocumentController.shared.documents
+            for document in restored {
+                document.close()
+            }
+            _ = await waitUntil(timeout: 5) {
+                NSDocumentController.shared.documents.isEmpty
+            }
+
+            let arrived = await waitUntil(timeout: 30) {
+                NSDocumentController.shared.documents.compactMap { $0 as? Document }.count >= expected
+            }
+            await delay(1.2)
+
+            let documents = NSDocumentController.shared.documents.compactMap { $0 as? Document }
+            guard arrived else {
+                fail("expected \(expected) documents via open events, got \(documents.count)")
+            }
+
+            let controllers = documents.compactMap {
+                $0.windowControllers.first as? DocumentWindowController
+            }
+            let host = controllers.first?.window
+            let groupWindows = host?.tabGroup?.windows ?? controllers.compactMap { $0.window }
+            let titles = groupWindows.map { $0.title }.sorted()
+
+            var perTab: [[String: Any]] = []
+            for window in groupWindows {
+                guard let controller = window.windowController as? DocumentWindowController else { continue }
+                let state = controller.debugState()
+                perTab.append([
+                    "title": window.title,
+                    "tabTitle": window.tab.title ?? window.title,
+                    "sidebarHeadings": state["sidebarHeadings"] ?? 0,
+                ])
+            }
+
+            let result: [String: Any] = [
+                "mode": "live-tabs",
+                "documentCount": documents.count,
+                "closedRestoredDocuments": restored.count,
+                "documentWindowCount": documentWindowCount(),
+                "visibleDocumentWindowCount": visibleDocumentWindowCount(),
+                "tabCount": groupWindows.count,
+                "titles": titles,
+                "tabBarVisible": host?.tabGroup?.isTabBarVisible ?? false,
+                "perTab": perTab,
+                "documentURLs": documents.compactMap { $0.fileURL?.lastPathComponent },
+            ]
+            write(result: result,
+                  to: setting("QDOWNTEST_JSON", flag: "--live-tabs-json", in: arguments),
+                  label: "QDOWNTABS")
+            exit(0)
+        }
+    }
+
+    /// Closes documents that NSDocumentController restored from a previous
+    /// session but the smoke harness did not create itself.
+    @MainActor
+    private static func closeUnexpectedDocuments(keeping documents: [Document]) {
+        let extras = NSDocumentController.shared.documents
+            .compactMap { $0 as? Document }
+            .filter { candidate in
+                !documents.contains { $0 === candidate }
+            }
+        for document in extras {
+            document.close()
+        }
+    }
+
+    @MainActor
+    private static func openDocumentForTesting(_ url: URL,
+                                               host: NSWindow?) async -> Result<Document, Error> {
+        await withCheckedContinuation { continuation in
+            DocumentOpenCoordinator.open(url, host: host) { result in
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    /// Counts virtual document windows: one per tab group, plus standalone
+    /// document windows.
+    @MainActor
+    private static func documentWindowCount() -> Int {
+        var identifiers = Set<ObjectIdentifier>()
+        for window in NSApp.windows
+        where window.windowController is DocumentWindowController && window.isVisible {
+            if let group = window.tabGroup {
+                identifiers.insert(ObjectIdentifier(group))
+            } else {
+                identifiers.insert(ObjectIdentifier(window))
+            }
+        }
+        return identifiers.count
+    }
+
+    @MainActor
+    private static func visibleDocumentWindowCount() -> Int {
+        NSApp.windows.filter {
+            $0.windowController is DocumentWindowController && $0.isVisible
+        }.count
+    }
+
+    private static func menuActionSelectors() -> [String] {
+        guard let mainMenu = NSApp.mainMenu else { return [] }
+        var selectors: [String] = []
+        for item in mainMenu.items {
+            guard let submenu = item.submenu else { continue }
+            for child in submenu.items {
+                if let action = child.action {
+                    selectors.append(NSStringFromSelector(action))
+                }
+            }
+        }
+        return selectors
+    }
+
+    private static func numberValue(_ value: Any?) -> Double {
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let double = value as? Double { return double }
+        if let int = value as? Int { return Double(int) }
+        return -1
     }
 
     // MARK: - Test steps

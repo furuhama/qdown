@@ -1,14 +1,18 @@
 import AppKit
 import UniformTypeIdentifiers
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private weak var recentMenu: NSMenu?
     private var renderTestStarted = false
+    private var isShowingOpenPanel = false
 
     // MARK: - Lifecycle
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Native window tabbing is the core of Qdown's multi-document UI.
+        NSWindow.allowsAutomaticWindowTabbing = true
         NSApp.mainMenu = buildMainMenu()
     }
 
@@ -28,11 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A plain launch has no document. Wait briefly for a possible open event
         // (double-click / "Open With"), then offer the open panel.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
-            guard self != nil else { return }
+            guard let self else { return }
             guard !RenderTestRunner.isTestMode else { return }
             if NSDocumentController.shared.documents.isEmpty,
                NSApp.windows.filter({ $0.isVisible }).isEmpty {
-                NSDocumentController.shared.openDocument(nil)
+                self.presentOpenPanel(preferredHost: nil)
             }
         }
     }
@@ -47,21 +51,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            NSDocumentController.shared.openDocument(nil)
+            presentOpenPanel(preferredHost: nil)
         }
         return false
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         // Command-line file arguments are for the headless harness, not for
-        // opening extra documents.
-        guard !RenderTestRunner.isTestMode else { return }
+        // opening extra documents. The live-tabs harness deliberately accepts
+        // real LaunchServices open events so Finder double-click is covered.
+        guard !RenderTestRunner.isTestMode || RenderTestRunner.acceptsOpenEvents else { return }
+        openFromEvent(urls)
+    }
 
-        for url in urls {
-            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
-                guard let error else { return }
-                self.presentError(error)
-            }
+    /// Legacy LaunchServices callback. NSDocumentController usually consumes
+    /// `odoc` events itself, but some launch paths can reach these delegate
+    /// methods; routing them through the coordinator keeps the tab rule.
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        guard !RenderTestRunner.isTestMode || RenderTestRunner.acceptsOpenEvents else {
+            sender.reply(toOpenOrPrint: .failure)
+            return
+        }
+        openFromEvent(filenames.map { URL(fileURLWithPath: $0) })
+        sender.reply(toOpenOrPrint: .success)
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        guard !RenderTestRunner.isTestMode || RenderTestRunner.acceptsOpenEvents else { return false }
+        openFromEvent([URL(fileURLWithPath: filename)])
+        return true
+    }
+
+    private func openFromEvent(_ urls: [URL]) {
+        // Capture the existing window before NSDocumentController opens the
+        // first new window, so all files land in one tab group.
+        let host = DocumentOpenCoordinator.preferredHostWindow()
+        DocumentOpenCoordinator.open(urls, host: host) { [weak self] result in
+            if case .failure(let error) = result { self?.presentError(error) }
         }
     }
 
@@ -114,6 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let open = NSMenuItem(title: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
         open.target = self
         fileMenu.addItem(open)
+
+        let newTab = NSMenuItem(title: "New Tab…", action: #selector(newTab(_:)), keyEquivalent: "t")
+        newTab.target = self
+        fileMenu.addItem(newTab)
 
         let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         let recent = NSMenu(title: "Open Recent")
@@ -198,6 +228,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mainMenu.addItem(windowMenuItem)
         let windowMenu = NSMenu(title: "Window")
         windowMenuItem.submenu = windowMenu
+
+        // Standard macOS window-tab commands. Targets stay nil so AppKit
+        // routes them through the responder chain (the key window).
+        windowMenu.addItem(withTitle: "Show Tab Bar",
+                           action: #selector(NSWindow.toggleTabBar(_:)),
+                           keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Show All Tabs",
+                           action: #selector(NSWindow.toggleTabOverview(_:)),
+                           keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Move Tab to New Window",
+                           action: #selector(NSWindow.moveTabToNewWindow(_:)),
+                           keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Merge All Windows",
+                           action: #selector(NSWindow.mergeAllWindows(_:)),
+                           keyEquivalent: "")
+        windowMenu.addItem(NSMenuItem.separator())
+
+        let nextTab = NSMenuItem(title: "Select Next Tab",
+                                 action: #selector(NSWindow.selectNextTab(_:)),
+                                 keyEquivalent: "\t")
+        nextTab.keyEquivalentModifierMask = [.control]
+        windowMenu.addItem(nextTab)
+        let previousTab = NSMenuItem(title: "Select Previous Tab",
+                                     action: #selector(NSWindow.selectPreviousTab(_:)),
+                                     keyEquivalent: "\t")
+        previousTab.keyEquivalentModifierMask = [.control, .shift]
+        windowMenu.addItem(previousTab)
+        windowMenu.addItem(NSMenuItem.separator())
+
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(NSMenuItem.separator())
@@ -214,13 +273,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openDocument(_ sender: Any?) {
-        NSDocumentController.shared.openDocument(sender)
+        presentOpenPanel(preferredHost: DocumentOpenCoordinator.preferredHostWindow())
+    }
+
+    @objc private func newTab(_ sender: Any?) {
+        presentOpenPanel(preferredHost: DocumentOpenCoordinator.preferredHostWindow())
     }
 
     @objc private func openRecent(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, let url = item.representedObject as? URL else { return }
-        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
-            if let error { self.presentError(error) }
+        let host = DocumentOpenCoordinator.preferredHostWindow()
+        DocumentOpenCoordinator.open(url, host: host) { [weak self] result in
+            if case .failure(let error) = result { self?.presentError(error) }
+        }
+    }
+
+    /// Qdown owns the Open panel instead of delegating to NSDocumentController
+    /// so every selected file goes through DocumentOpenCoordinator and joins
+    /// the existing window's tab group.
+    private func presentOpenPanel(preferredHost: NSWindow?) {
+        guard !isShowingOpenPanel else { return }
+        isShowingOpenPanel = true
+
+        let panel = NSOpenPanel()
+        panel.title = "Open Markdown"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [
+            UTType(importedAs: "net.daringfireball.markdown"),
+            .plainText,
+        ]
+
+        // `preferredHost` is captured now: the open panel itself becomes the
+        // key window while it is on screen.
+        let host = preferredHost
+        panel.begin { [weak self] response in
+            guard let self else { return }
+            self.isShowingOpenPanel = false
+            guard response == .OK else { return }
+            DocumentOpenCoordinator.open(panel.urls, host: host) { [weak self] result in
+                if case .failure(let error) = result { self?.presentError(error) }
+            }
         }
     }
 

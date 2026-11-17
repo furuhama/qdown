@@ -3,6 +3,10 @@ import WebKit
 
 final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
 
+    /// All Qdown document windows share this identifier so AppKit can merge
+    /// them into native window tabs (and so a detached tab can be re-merged).
+    static let tabbingIdentifier = "QdownDocument"
+
     let qdownDocument: Document
     private let sidebarViewController: SidebarViewController
     private let contentPane: ContentViewController
@@ -29,7 +33,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             defer: false
         )
         window.title = qdownDocument.fileURL?.lastPathComponent ?? "Qdown"
-        window.tabbingMode = .disallowed
+        window.tabbingMode = .preferred
+        window.tabbingIdentifier = Self.tabbingIdentifier
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 520, height: 400)
         window.backgroundColor = NSColor(srgbRed: 0.941, green: 0.941, blue: 0.969, alpha: 1.0)
@@ -99,11 +104,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     override func showWindow(_ sender: Any?) {
         updateTitle()
         super.showWindow(sender)
+        // Fallback for window controllers shown outside the normal
+        // Document.makeWindowControllers path; the makeWindowControllers hook
+        // covers NSDocumentController's own Finder/Apple Event opens.
+        if let window {
+            DocumentOpenCoordinator.attachToExistingWindow(window)
+        }
         window?.makeFirstResponder(webView)
     }
 
     private func updateTitle() {
-        window?.title = qdownDocument.fileURL?.lastPathComponent ?? "Qdown"
+        let name = qdownDocument.fileURL?.lastPathComponent ?? "Qdown"
+        window?.title = name
+        window?.tab.title = name
+        window?.tab.toolTip = qdownDocument.fileURL?.path
         window?.representedURL = qdownDocument.fileURL
     }
 
@@ -131,8 +145,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         let extensionName = url.pathExtension.lowercased()
         if ["md", "markdown", "txt"].contains(extensionName) {
-            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { [weak self] _, _, error in
-                if let error { self?.showOpenError(error) }
+            // Local Markdown links open as a new tab in this same window.
+            DocumentOpenCoordinator.open(url, host: window) { [weak self] result in
+                if case .failure(let error) = result { self?.showOpenError(error) }
             }
         } else {
             NSWorkspace.shared.open(url)
@@ -148,10 +163,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             NSSound.beep()
             return
         }
-        for url in accepted {
-            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { [weak self] _, _, error in
-                if let error { self?.showOpenError(error) }
-            }
+        DocumentOpenCoordinator.open(accepted, host: window) { [weak self] result in
+            if case .failure(let error) = result { self?.showOpenError(error) }
         }
     }
 
@@ -260,6 +273,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func debugState() -> [String: Any] {
         [
             "title": window?.title ?? "",
+            "tabTitle": window?.tab.title ?? "",
             "sidebarHeadings": sidebarViewController.headingCount,
             "pageZoom": webView.pageZoom,
             "findVisible": contentPane.isFindVisible,
@@ -267,6 +281,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             "findCountText": contentPane.findBar.debugCountText,
             "viewerReady": webView.isViewerReady,
             "windowCount": NSApp.windows.filter { $0.isVisible }.count,
+            "tabCount": window?.tabbedWindows?.count ?? 1,
+            "tabTitles": window?.tabbedWindows?.map { $0.title } ?? (window.map { [$0.title] } ?? []),
         ]
     }
 

@@ -39,6 +39,8 @@ def main():
     smoke_two = load_json_with_prefix(out / "smoke-two.stdout", "QDOWNSMOKE")
     smoke_zoom = load_json_with_prefix(out / "smoke-zoom.stdout", "QDOWNSMOKE")
     smoke_link = load_json_with_prefix(out / "smoke-link.stdout", "QDOWNSMOKE")
+    tabs = json.loads((out / "tabs.json").read_text())
+    live_tabs = json.loads((out / "live-tabs.json").read_text())
 
     # ---- Markdown rendering -------------------------------------------------
     initial = render["initial"]
@@ -207,9 +209,77 @@ def main():
               f"smoke.textDecoder.{key}", extras["textDecoder"][key])
 
     check(smoke_link["states"][-1]["documentCount"] == 1, "smokeLink.documentCount")
-    link_titles = smoke_link["states"][-1].get("localLinkWindowTitles", [])
-    check("other.md" in link_titles, "smokeLink.otherWindow", str(link_titles))
-    check("test.md" in link_titles, "smokeLink.originalWindow", str(link_titles))
+    link_state = smoke_link["states"][-1]
+    check(link_state.get("localLinkDocumentWindowCount") == 1,
+          "smokeLink.sameWindow",
+          str(link_state.get("localLinkDocumentWindowCount")))
+    check(link_state.get("localLinkTabTitles") == ["other.md", "test.md"],
+          "smokeLink.tabTitles", str(link_state.get("localLinkTabTitles")))
+
+    # ---- Native window tabs -------------------------------------------------
+    opened = tabs["opened"]
+    check(tabs["automaticTabbing"] is False, "tabs.automaticTabbingDisabled")
+    check(opened["tabCount"] == 2, "tabs.tabCount", str(opened["tabCount"]))
+    check(opened["titles"] == ["other.md", "test.md"], "tabs.titles", str(opened["titles"]))
+    check(opened["documentWindowCount"] == 1, "tabs.documentWindowCount",
+          str(opened["documentWindowCount"]))
+    check(opened["tabBarVisible"] is True, "tabs.tabBarVisible")
+    per_tab = opened.get("perTab", [])
+    check({entry["title"] for entry in per_tab} == {"test.md", "other.md"},
+          "tabs.perTabTitles", str([entry.get("title") for entry in per_tab]))
+    check(all(entry["tabTitle"] == entry["title"] for entry in per_tab),
+          "tabs.tabTitleMatchesWindowTitle", str(per_tab))
+    check(all(entry["sidebarHeadings"] > 0 for entry in per_tab),
+          "tabs.perTabSidebars", str(per_tab))
+
+    scroll = tabs["scroll"]
+    check(scroll.get("before", 0) > 0, "tabs.scrollBefore", str(scroll.get("before")))
+    check(scroll.get("preserved") is True, "tabs.scrollPreserved", str(scroll))
+
+    local_link = tabs["localLink"]
+    check(local_link.get("rendered") is True, "tabs.localLink.rendered")
+    check(local_link.get("tabCount") == 3, "tabs.localLink.tabCount",
+          str(local_link.get("tabCount")))
+    check(local_link.get("titles") == ["other.md", "security.md", "test.md"],
+          "tabs.localLink.titles", str(local_link.get("titles")))
+    check(local_link.get("documentWindowCount") == 1, "tabs.localLink.sameWindow",
+          str(local_link.get("documentWindowCount")))
+    check(all(entry["sidebarHeadings"] > 0 for entry in local_link.get("perTab", [])),
+          "tabs.localLink.perTabSidebars", str(local_link.get("perTab")))
+
+    detach = tabs["detach"]
+    check(detach.get("tabCountAfterDetach") == 2, "tabs.detach.tabCount",
+          str(detach.get("tabCountAfterDetach")))
+    check(detach.get("documentWindowCountAfterDetach") == 2,
+          "tabs.detach.documentWindowCount",
+          str(detach.get("documentWindowCountAfterDetach")))
+    check(detach.get("tabCountAfterMerge") == 3, "tabs.merge.tabCount",
+          str(detach.get("tabCountAfterMerge")))
+    check(detach.get("documentWindowCountAfterMerge") == 1,
+          "tabs.merge.documentWindowCount",
+          str(detach.get("documentWindowCountAfterMerge")))
+
+    for selector in ("toggleTabBar:", "moveTabToNewWindow:", "mergeAllWindows:", "selectNextTab:"):
+        check(selector in tabs["menuActions"], f"tabs.menu.{selector}")
+
+    # ---- Real LaunchServices (Finder double-click style) open events --------
+    check(live_tabs["documentCount"] == 2, "liveTabs.documentCount",
+          str(live_tabs["documentCount"]))
+    check(sorted(live_tabs["documentURLs"]) == ["other.md", "test.md"],
+          "liveTabs.documentURLs", str(live_tabs["documentURLs"]))
+    check(live_tabs["documentWindowCount"] == 1, "liveTabs.documentWindowCount",
+          str(live_tabs["documentWindowCount"]))
+    check(live_tabs["tabCount"] == 2, "liveTabs.tabCount", str(live_tabs["tabCount"]))
+    check(live_tabs["titles"] == ["other.md", "test.md"], "liveTabs.titles",
+          str(live_tabs["titles"]))
+    check(live_tabs["tabBarVisible"] is True, "liveTabs.tabBarVisible")
+    live_per_tab = live_tabs.get("perTab", [])
+    check({entry["title"] for entry in live_per_tab} == {"test.md", "other.md"},
+          "liveTabs.perTabTitles", str([entry.get("title") for entry in live_per_tab]))
+    check(all(entry["tabTitle"] == entry["title"] for entry in live_per_tab),
+          "liveTabs.tabTitleMatchesWindowTitle", str(live_per_tab))
+    check(all(entry["sidebarHeadings"] > 0 for entry in live_per_tab),
+          "liveTabs.perTabSidebars", str(live_per_tab))
 
     # ---- Artifacts, CSS, Info.plist ----------------------------------------
     expected_css_hash = "5e33b8e7a578e0b5f93467ff7882c4314d1fcad9d3863ea0656151f0300477b6"

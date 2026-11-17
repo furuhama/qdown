@@ -38,6 +38,8 @@ rm -f "$OUT"/render.json "$OUT"/render-fallback.json "$OUT"/security.json \
       "$OUT"/smoke-two.stdout "$OUT"/smoke-two.stderr \
       "$OUT"/smoke-zoom.stdout "$OUT"/smoke-zoom.stderr \
       "$OUT"/smoke-link.stdout "$OUT"/smoke-link.stderr \
+      "$OUT"/smoke-tabs.stdout "$OUT"/smoke-tabs.stderr "$OUT"/tabs.json \
+      "$OUT"/smoke-live-tabs.stdout "$OUT"/smoke-live-tabs.stderr "$OUT"/live-tabs.json \
       "$OUT"/01-top.png "$OUT"/02-mermaid.png "$OUT"/03-section.png \
       "$OUT"/04-sidebar.png
 
@@ -115,6 +117,41 @@ run_qdown smoke-link \
   QDOWNTEST_MODE=smoke \
   QDOWNTEST_FILES=test.md \
   QDOWNTEST_LINK=1
+
+run_qdown smoke-tabs \
+  QDOWNTEST_MODE=tabs \
+  QDOWNTEST_FILES=$'test.md\nTests/fixtures/other.md' \
+  QDOWNTEST_JSON=build/test-output/tabs.json
+
+# Real LaunchServices/Mac Finder path: the app is started directly so it can
+# read its test environment, then `open -a` delivers ordinary `odoc` open
+# events, which NSDocumentController handles itself. No option-style argv is
+# ever passed to the app.
+echo "==> smoke-live-tabs (LaunchServices open events)"
+kill_qdown
+rm -f "$OUT/live-tabs.json"
+started="$(date +%s)"
+status=0
+timeout --signal=TERM --kill-after=5 "$TIMEOUT_SECS" bash -c '
+  qs="$1"; app="$2"; first="$3"; second="$4"; json="$5"; out="$6"
+  env QDOWNTEST_MODE=live-tabs QDOWNTEST_JSON="$json" QDOWNTEST_EXPECT_COUNT=2 \
+    "$qs" > "$out.stdout" 2> "$out.stderr" &
+  pid=$!
+  sleep 3
+  open -a "$app" "$first"
+  sleep 5
+  open -a "$app" "$second"
+  wait "$pid"
+' _ "$QS" "$APP" "$ROOT/test.md" "$ROOT/Tests/fixtures/other.md" \
+    "$OUT/live-tabs.json" "$OUT/smoke-live-tabs" || status=$?
+kill_qdown
+elapsed=$(( $(date +%s) - started ))
+echo "    exit=$status elapsed=${elapsed}s"
+if [ "$status" -ne 0 ]; then
+  echo "error: smoke-live-tabs failed (exit $status)" >&2
+  tail -20 "$OUT/smoke-live-tabs.stderr" >&2 || true
+  exit "$status"
+fi
 
 echo "==> Checking results"
 python3 "$ROOT/Tests/verify_results.py" "$OUT"

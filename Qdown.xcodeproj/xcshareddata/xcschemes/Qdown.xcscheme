@@ -5,7 +5,7 @@
          <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A1000000000000000000002F"
+               BlueprintIdentifier = "A10000000000000000000031"
                BuildableName = "Qdown.app"
                BlueprintName = "Qdown"
                ReferencedContainer = "container:Qdown.xcodeproj">
@@ -21,7 +21,7 @@
       <BuildableProductRunnable runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A1000000000000000000002F"
+            BlueprintIdentifier = "A10000000000000000000031"
             BuildableName = "Qdown.app"
             BlueprintName = "Qdown"
             ReferencedContainer = "container:Qdown.xcodeproj">
@@ -32,7 +32,7 @@
       <BuildableProductRunnable runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A1000000000000000000002F"
+            BlueprintIdentifier = "A10000000000000000000031"
             BuildableName = "Qdown.app"
             BlueprintName = "Qdown"
             ReferencedContainer = "container:Qdown.xcodeproj">
