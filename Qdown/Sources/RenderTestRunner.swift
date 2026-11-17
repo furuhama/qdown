@@ -25,6 +25,7 @@ enum RenderTestRunner {
         case smoke
         case tabs
         case liveTabs
+        case window
     }
 
     private static var mode: TestMode? {
@@ -33,6 +34,7 @@ enum RenderTestRunner {
             if raw == "smoke" { return .smoke }
             if raw == "tabs" { return .tabs }
             if raw == "live-tabs" { return .liveTabs }
+            if raw == "window" { return .window }
         }
         let arguments = CommandLine.arguments
         if arguments.contains("--smoke-test") { return .smoke }
@@ -81,6 +83,8 @@ enum RenderTestRunner {
             runTabTest(arguments: arguments)
         case .liveTabs:
             runLiveTabsTest(arguments: arguments)
+        case .window:
+            runWindowTest(arguments: arguments)
         case nil:
             return
         }
@@ -175,10 +179,48 @@ enum RenderTestRunner {
         let headingStats = await scrollToMiddleHeading(in: webView, initial: initial)
         let sectionSnapshot = await snapshot(of: webView, path: sectionSnapshotPath)
 
+        // Floating outline: the active bar must follow the heading the harness
+        // just jumped to, a bar click must smooth-scroll to its heading, and
+        // the hover/test panel must expand without reflowing the document.
+        let outlineAfterScroll = await stats(from: webView)
+        let outlineClicked = await evaluate(webView,
+            "(function(){var b=document.querySelectorAll('#qdown-outline .qdown-outline-bar');"
+            + "if(!b.length){return -1;}var i=3;b[i].click();return i;})()")
+        await delay(1.3)
+        var outlineClickStats = await stats(from: webView)
+        outlineClickStats["clickedIndex"] = outlineClicked ?? -1
+        outlineClickStats["scrollY"] = await evaluate(webView, "window.scrollY") ?? -1
+        outlineClickStats["targetHeadingTop"] = await evaluate(webView,
+            "(function(){var h=document.getElementById('qdown-heading-3');"
+            + "return h?h.getBoundingClientRect().top:null;})()") ?? -1
+        _ = await evaluate(webView, "window.qdown.setOutlineExpanded(true);")
+        await delay(0.3)
+        let outlineExpandedStats = await stats(from: webView)
+        _ = await evaluate(webView, "window.qdown.setOutlineExpanded(false);")
+
         let narrowStats = await resize(window: window, webView: webView, width: 520)
         let compactStats = await resize(window: window, webView: webView, width: 380)
         let wideStats = await resize(window: window, webView: webView, width: 1400)
         let restoredStats = await resize(window: window, webView: webView, width: 1100)
+
+        // The outline must keep a constant on-screen bar width at every page
+        // zoom. WKWebView.pageZoom scales the page, so the page counter-scales
+        // the outline by 1/zoom.
+        var outlineZooms: [String: Any] = [:]
+        for zoom in [0.5, 1.0, 1.25, 2.5] {
+            webView.applyPageZoom(zoom)
+            _ = await evaluate(webView, "window.scrollTo(0, 0);")
+            await delay(0.5)
+            let zoomStats = await stats(from: webView)
+            outlineZooms[String(format: "%.2f", zoom)] = [
+                "pageZoom": webView.pageZoom,
+                "outline": zoomStats["outline"] ?? [:],
+                "layout": zoomStats["layout"] ?? [:],
+            ]
+        }
+        webView.applyPageZoom(1.0)
+        await delay(0.3)
+
         let security = await securityProbe(in: webView)
 
         let result: [String: Any] = [
@@ -201,6 +243,10 @@ enum RenderTestRunner {
             "compact": compactStats,
             "wide": wideStats,
             "restored": restoredStats,
+            "outlineAfterScroll": outlineAfterScroll,
+            "outlineClick": outlineClickStats,
+            "outlineExpanded": outlineExpandedStats,
+            "outlineZooms": outlineZooms,
             "security": security,
         ]
         write(result: result, to: jsonPath, label: "QDOWNTEST")
@@ -275,7 +321,7 @@ enum RenderTestRunner {
             closeUnexpectedDocuments(keeping: documents)
 
             let ready = await waitUntil(timeout: 15) {
-                controllers.allSatisfy { ($0.debugState()["sidebarHeadings"] as? Int ?? 0) > 0 }
+                controllers.allSatisfy { ($0.debugState()["outlineHeadingCount"] as? Int ?? 0) > 0 }
             }
             guard ready else { fail("native windows did not render in time") }
 
@@ -289,15 +335,9 @@ enum RenderTestRunner {
             ]
 
             if let first = controllers.first {
-                if let sidebarSnapshot = setting("QDOWNTEST_SIDEBAR_SNAPSHOT",
-                                                 flag: "--smoke-sidebar-snapshot",
-                                                 in: arguments) {
-                    extras["sidebarSnapshot"] = first.saveSidebarSnapshot(to: sidebarSnapshot) ?? ""
-                }
-
                 // Headerless chrome evidence: one capture of the whole window
                 // frame (traffic lights included) and one of the content view
-                // (sidebar + page background reaching the top edge).
+                // (page background reaching the top edge).
                 if let windowSnapshot = setting("QDOWNTEST_WINDOW_SNAPSHOT",
                                                 flag: "--smoke-window-snapshot",
                                                 in: arguments) {
@@ -342,48 +382,19 @@ enum RenderTestRunner {
                 await delay(0.15)
                 extras["findBarVisibleAfterEscape"] = first.debugState()["findVisible"] ?? false
 
-                let clicked = first.clickSidebarHeadingForTesting(id: "qdown-heading-8")
-                await delay(0.5)
-                extras["sidebarClick"] = clicked
-                extras["sidebarClickScrollY"] = await first.evaluateForTesting("window.scrollY") ?? -1
-
-                // Click every sidebar heading and confirm the target heading is
-                // brought into the visible viewport. This covers the "all
-                // headings are jump targets" acceptance condition.
-                var sidebarJumps: [[String: Any]] = []
-                let headingTotal = (first.debugState()["sidebarHeadings"] as? Int) ?? 0
-                let viewportHeight = Double(first.window?.contentView?.bounds.height ?? 0)
-                for index in 0..<headingTotal {
-                    let id = "qdown-heading-\(index)"
-                    let jumpClicked = first.clickSidebarHeadingForTesting(id: id)
-                    await delay(0.12)
-                    let scrollY = await first.evaluateForTesting("window.scrollY") ?? -1
-                    let script = "(function () { var e = document.getElementById('\(id)'); "
-                        + "return e ? e.getBoundingClientRect().top : null; })()"
-                    let headingTopValue = await first.evaluateForTesting(script)
-                    let headingTop: Double
-                    if let number = headingTopValue as? NSNumber {
-                        headingTop = number.doubleValue
-                    } else if let value = headingTopValue as? Double {
-                        headingTop = value
-                    } else {
-                        headingTop = -9999
-                    }
-                    sidebarJumps.append([
-                        "id": id,
-                        "clicked": jumpClicked,
-                        "scrollY": scrollY,
-                        "headingTop": headingTop,
-                        "visible": headingTop >= -8 && headingTop <= viewportHeight,
-                    ])
-                }
-                extras["sidebarJumps"] = sidebarJumps
-                extras["sidebarAllClicked"] = sidebarJumps.allSatisfy {
-                    ($0["clicked"] as? Bool) == true
-                }
-                extras["sidebarAllVisible"] = sidebarJumps.allSatisfy {
-                    ($0["visible"] as? Bool) == true
-                }
+                // Floating outline evidence for the single-document layout.
+                // The bars must exist in the page and match the headings; a
+                // real click on the last bar must jump and move the active bar.
+                extras["outline"] = await first.evaluateForTesting(
+                    "JSON.stringify(window.qdown.outlineDebug())") ?? "{}"
+                let outlineClick = await first.evaluateForTesting(
+                    "(function(){var b=document.querySelectorAll('#qdown-outline .qdown-outline-bar');"
+                    + "if(!b.length){return false;}b[b.length-1].click();return true;})()")
+                await delay(1.1)
+                extras["outlineClick"] = (outlineClick as? Bool) ?? false
+                extras["outlineClickScrollY"] = await first.evaluateForTesting("window.scrollY") ?? -1
+                extras["outlineAfterClick"] = await first.evaluateForTesting(
+                    "JSON.stringify(window.qdown.outlineDebug())") ?? "{}"
 
                 if booleanSetting("QDOWNTEST_LINK", flag: "--smoke-link", in: arguments) {
                     first.openLinkForTesting("Tests/fixtures/other.md")
@@ -448,7 +459,7 @@ enum RenderTestRunner {
         Task { @MainActor in
             // macOS may replay a previous session's restoration/open events.
             // Those documents are not part of this test and would add tabs
-            // with no rendered sidebar (and make the tab counts unstable).
+            // with no rendered content (and make the tab counts unstable).
             await delay(0.8)
             closeUnexpectedDocuments(keeping: [])
             await delay(0.4)
@@ -478,7 +489,7 @@ enum RenderTestRunner {
             let rendered = await waitUntil(timeout: 25) {
                 documents.allSatisfy { document in
                     let headings = (document.windowControllers.first as? DocumentWindowController)?
-                        .debugState()["sidebarHeadings"] as? Int ?? 0
+                        .debugState()["outlineHeadingCount"] as? Int ?? 0
                     return headings > 0
                 }
             }
@@ -500,8 +511,8 @@ enum RenderTestRunner {
             ]
 
             // Chrome geometry with the native tab bar on screen. The window
-            // and content snapshots are the visual evidence that the tab bar
-            // does not cover the sidebar header, sidebar rows, or the WebView.
+            // and content snapshots are the visual evidence that AppKit's tab
+            // bar spans the window and the document starts below it.
             if let hostController = hostWindow.windowController as? DocumentWindowController {
                 opened["chrome"] = hostController.debugState()
                 if let windowSnapshot = setting("QDOWNTEST_WINDOW_SNAPSHOT",
@@ -526,7 +537,7 @@ enum RenderTestRunner {
                 perTab.append([
                     "title": window.title,
                     "tabTitle": window.tab.title ?? window.title,
-                    "sidebarHeadings": state["sidebarHeadings"] ?? 0,
+                    "outlineHeadingCount": state["outlineHeadingCount"] ?? 0,
                     "mainHeading": mainHeading ?? "",
                 ])
             }
@@ -540,9 +551,8 @@ enum RenderTestRunner {
             if booleanSetting("QDOWNTEST_SCREEN_ONLY", flag: "--tabs-screen-only", in: arguments) {
                 NSApp.activate(ignoringOtherApps: true)
                 hostWindow.makeKeyAndOrderFront(nil)
-                // Select the leading tab so the real-screen geometry check can
-                // assert that the selected tab starts at the window's left
-                // edge (the old layout inset it by the sidebar width).
+                // Select the leading tab so the real-screen capture always
+                // shows the same tab as the geometry metadata.
                 if let firstWindow = initialWindows.first {
                     hostWindow.tabGroup?.selectedWindow = firstWindow
                 }
@@ -609,7 +619,7 @@ enum RenderTestRunner {
                     let state = controller.debugState()
                     linkTabs.append([
                         "title": window.title,
-                        "sidebarHeadings": state["sidebarHeadings"] ?? 0,
+                        "outlineHeadingCount": state["outlineHeadingCount"] ?? 0,
                     ])
                 }
                 localLink = [
@@ -731,7 +741,7 @@ enum RenderTestRunner {
                 perTab.append([
                     "title": window.title,
                     "tabTitle": window.tab.title ?? window.title,
-                    "sidebarHeadings": state["sidebarHeadings"] ?? 0,
+                    "outlineHeadingCount": state["outlineHeadingCount"] ?? 0,
                 ])
             }
 
@@ -757,6 +767,87 @@ enum RenderTestRunner {
             write(result: result,
                   to: setting("QDOWNTEST_JSON", flag: "--live-tabs-json", in: arguments),
                   label: "QDOWNTABS")
+            exit(0)
+        }
+    }
+
+    /// Real-screen capture harness for the single-document layout and the
+    /// expanded floating outline. It opens one document, optionally scrolls to
+    /// a heading and forces the outline panel open, then writes its window
+    /// number so the shell script can `screencapture -l` it.
+    private static func runWindowTest(arguments: [String]) {
+        var paths: [String] = []
+        if let environmentFiles = ProcessInfo.processInfo.environment["QDOWNTEST_FILES"],
+           !environmentFiles.isEmpty {
+            paths = environmentFiles.split(separator: "\n").map(String.init)
+        }
+        guard let path = paths.first else {
+            fail("usage: QDOWNTEST_MODE=window QDOWNTEST_FILES=<file.md> Qdown")
+        }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        _ = NSDocumentController.shared
+
+        Task { @MainActor in
+            await delay(0.8)
+            closeUnexpectedDocuments(keeping: [])
+            await delay(0.4)
+            closeUnexpectedDocuments(keeping: [])
+
+            let opened = await openDocumentForTesting(url, host: nil)
+            guard case .success(let document) = opened,
+                  let window = document.windowControllers.first?.window,
+                  let controller = window.windowController as? DocumentWindowController else {
+                fail("cannot open \(url.path)")
+            }
+
+            let rendered = await waitUntil(timeout: 25) {
+                (controller.debugState()["outlineHeadingCount"] as? Int ?? 0) > 0
+            }
+            guard rendered else { fail("window test document did not render in time") }
+            await delay(0.8)
+
+            window.setContentSize(NSSize(width: 1120, height: 780))
+            window.center()
+            if let rawZoom = ProcessInfo.processInfo.environment["QDOWNTEST_ZOOM"],
+               let zoom = Double(rawZoom), zoom > 0 {
+                controller.applyZoomForTesting(zoom)
+                await delay(0.5)
+            }
+            if booleanSetting("QDOWNTEST_OUTLINE_EXPANDED",
+                              flag: "--window-outline-expanded",
+                              in: arguments) {
+                _ = await controller.evaluateForTesting(
+                    "window.qdown.scrollToHeading('qdown-heading-8');")
+                await delay(0.5)
+                _ = await controller.evaluateForTesting(
+                    "window.qdown.setOutlineExpanded(true);")
+                await delay(0.5)
+            }
+
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            await delay(0.6)
+
+            let outlineJSON = await controller.evaluateForTesting(
+                "JSON.stringify(window.qdown.outlineDebug())") as? String ?? "{}"
+            var result: [String: Any] = [
+                "mode": "window",
+                "outline": outlineJSON,
+                "windowNumber": window.windowNumber,
+                "windowFrame": NSStringFromRect(window.frame),
+                "chrome": controller.debugState(),
+            ]
+            if let screen = window.screen {
+                result["screenFrame"] = NSStringFromRect(screen.frame)
+            }
+            write(result: result,
+                  to: setting("QDOWNTEST_SCREEN_JSON", flag: "--window-screen-json", in: arguments),
+                  label: "QDOWNNWINDOW")
+
+            let hold = Double(ProcessInfo.processInfo.environment["QDOWNTEST_HOLD_SECONDS"] ?? "") ?? 0
+            if hold > 0 {
+                await delay(hold)
+            }
             exit(0)
         }
     }

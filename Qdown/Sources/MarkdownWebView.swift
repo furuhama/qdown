@@ -195,6 +195,19 @@ final class MarkdownWebView: WKWebView, WKNavigationDelegate, WKScriptMessageHan
         evaluateJavaScript("window.qdown.clearFind();", completionHandler: nil)
     }
 
+    /// Applies the page zoom and mirrors it into the page. The floating outline
+    /// lives inside the WKWebView, so it must divide the page zoom back out to
+    /// keep its bars and panel at a constant on-screen size.
+    func applyPageZoom(_ value: Double) {
+        pageZoom = value
+        syncPageZoomToViewer()
+    }
+
+    private func syncPageZoomToViewer() {
+        guard isViewerLoaded else { return }
+        evaluateJavaScript("window.qdown.setPageZoom(\(pageZoom));", completionHandler: nil)
+    }
+
     func setFindFallback(_ enabled: Bool) {
         evaluateJavaScript("window.qdown.setFindFallback(\(enabled ? "true" : "false"));", completionHandler: nil)
     }
@@ -239,6 +252,7 @@ final class MarkdownWebView: WKWebView, WKNavigationDelegate, WKScriptMessageHan
         case "ready":
             isViewerLoaded = true
             onViewerReady?()
+            syncPageZoomToViewer()
             flushPendingRender()
 
         case "headings":
@@ -320,6 +334,7 @@ final class MarkdownWebView: WKWebView, WKNavigationDelegate, WKScriptMessageHan
         if !isViewerLoaded {
             isViewerLoaded = true
             onViewerReady?()
+            syncPageZoomToViewer()
             flushPendingRender()
         }
     }

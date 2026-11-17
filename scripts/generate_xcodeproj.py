@@ -57,7 +57,6 @@ sources = [
     "DocumentWindowController.swift",
     "MarkdownWebView.swift",
     "LocalSchemeHandler.swift",
-    "SidebarViewController.swift",
     "FindBarView.swift",
     "LinkRouter.swift",
     "ZoomStore.swift",
