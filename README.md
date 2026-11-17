@@ -24,10 +24,11 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
 - **Headerless window.** The titlebar is transparent (`fullSizeContentView` +
   `titlebarAppearsTransparent`) and the title is hidden. When tabs are shown
   AppKit's native tab bar occupies the titlebar row and the page starts below
-  its safe area. With a single document the tab bar is hidden automatically,
-  the filename still appears in the native tab, and only the 28-point
-  traffic-light strip remains above the page; that strip is a draggable window
-  region and the page background reaches the window's top edge.
+  its safe area. With a single document the tab bar is hidden automatically
+  (the filename stays set as the window/tab title, as before), and only the
+  28-point traffic-light strip remains above the page; that strip is a
+  draggable window region and the page background reaches the window's top
+  edge.
 - **Relative links open in a new tab.** A relative Markdown link opens as a new
   tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
