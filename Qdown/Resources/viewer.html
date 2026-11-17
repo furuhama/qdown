@@ -13,6 +13,14 @@
 <body>
 <main id="content" class="markdown-body" aria-live="polite"></main>
 
+<!-- Floating table of contents (method A: page-level overlay).
+     It must stay outside #content: render() replaces #content.innerHTML, and
+     find/A must never pick up the outline text. -->
+<aside id="qdown-outline" aria-label="見出し" hidden>
+  <div class="qdown-outline-bars" role="navigation" aria-label="見出しバー"></div>
+  <div class="qdown-outline-panel" role="navigation" aria-label="見出し一覧"></div>
+</aside>
+
 <script src="qdown://app/vendor/marked.min.js"></script>
 <script src="qdown://app/vendor/highlight.min.js"></script>
 <script src="qdown://app/vendor/highlight-languages/dockerfile.min.js"></script>

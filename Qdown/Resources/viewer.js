@@ -9,12 +9,23 @@
   var baseElement = document.getElementById('qdown-base');
   if (!content || !baseElement) { return; }
 
+  // Floating outline lives outside #content on purpose: render() replaces
+  // #content.innerHTML and find()/select-all must never see outline text.
+  var outline = document.getElementById('qdown-outline');
+  var outlineBars = outline ? outline.querySelector('.qdown-outline-bars') : null;
+  var outlinePanel = outline ? outline.querySelector('.qdown-outline-panel') : null;
+
   var errors = [];
   var state = {
     token: 0,
     rendered: false,
     markdownLength: 0,
     headings: [],
+    pageZoom: 1,
+    outline: {
+      offsets: [],
+      activeIndex: -1
+    },
     find: {
       query: '',
       count: 0,
@@ -565,6 +576,240 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Floating outline
+  // ---------------------------------------------------------------------------
+
+  function outlineAvailable() {
+    return !!(outline && outlineBars && outlinePanel);
+  }
+
+  function outlineLevelClass(level) {
+    return 'qdown-outline-level-' + level;
+  }
+
+  function buildOutline() {
+    if (!outlineAvailable()) { return; }
+    outlineBars.textContent = '';
+    outlinePanel.textContent = '';
+
+    state.headings.forEach(function (heading, index) {
+      var bar = document.createElement('button');
+      bar.type = 'button';
+      bar.className = 'qdown-outline-bar ' + outlineLevelClass(heading.level);
+      bar.setAttribute('data-index', String(index));
+      bar.setAttribute('data-id', heading.id);
+      bar.setAttribute('aria-label', heading.text || ('見出し ' + (index + 1)));
+      var visual = document.createElement('span');
+      visual.className = 'qdown-outline-bar-visual';
+      bar.appendChild(visual);
+      bar.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        jumpToOutlineIndex(index);
+      });
+      outlineBars.appendChild(bar);
+
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'qdown-outline-item ' + outlineLevelClass(heading.level);
+      item.setAttribute('data-index', String(index));
+      item.setAttribute('data-id', heading.id);
+      // textContent (not innerHTML): heading text is never re-parsed as markup.
+      item.textContent = heading.text || ('見出し ' + (index + 1));
+      item.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        jumpToOutlineIndex(index);
+      });
+      outlinePanel.appendChild(item);
+    });
+
+    outline.hidden = state.headings.length === 0;
+    state.outline.activeIndex = -1;
+    state.outline.offsets = [];
+    syncOutlineGeometry();
+    scheduleOutlineMeasure();
+  }
+
+  /// Clicking a bar or an item uses the same jump as the native side, with a
+  /// smooth scroll so the heading settles near the top edge.
+  function jumpToOutlineIndex(index) {
+    var heading = state.headings[index];
+    if (!heading) { return false; }
+    var jumped = scrollToHeading(heading.id, true);
+    setOutlineActive(index);
+    return jumped;
+  }
+
+  /// The outline is inside the zoomed page, so undo WKWebView.pageZoom with a
+  /// counter-scale. `right` is a CSS position (physical offset gets multiplied
+  /// by pageZoom, matching the text column's margin); the height is a content
+  /// dimension and must be multiplied by the zoom before the counter-scale.
+  function syncOutlineGeometry() {
+    if (!outlineAvailable()) { return; }
+    var zoom = state.pageZoom > 0 ? state.pageZoom : 1;
+    var bodyWidth = document.body ? document.body.getBoundingClientRect().width : window.innerWidth;
+    var gap = Math.max(8, (window.innerWidth - bodyWidth) / 2);
+    outline.style.right = gap + 'px';
+    outline.style.height = (window.innerHeight * zoom) + 'px';
+    outline.classList.toggle('qdown-outline-compact', (window.innerWidth * zoom) < 720);
+  }
+
+  function measureOutline() {
+    if (!outlineAvailable()) { return; }
+    state.outline.offsets = state.headings.map(function (heading) {
+      var element = document.getElementById(heading.id);
+      if (!element) { return null; }
+      return window.scrollY + element.getBoundingClientRect().top;
+    });
+    syncOutlineGeometry();
+    updateOutlineActive();
+  }
+
+  /// Cheap enough to run synchronously (one rect per heading). rAF is not used
+  /// here because WKWebView throttles it when the window is not on screen,
+  /// which would freeze the outline during unattended verification.
+  function scheduleOutlineMeasure() {
+    if (!outlineAvailable()) { return; }
+    measureOutline();
+  }
+
+  function setOutlineActive(index) {
+    if (!outlineAvailable()) { return; }
+    state.outline.activeIndex = index;
+    var bars = outlineBars.children;
+    var items = outlinePanel.children;
+    for (var cursor = 0; cursor < bars.length; cursor += 1) {
+      var on = cursor === index;
+      bars[cursor].classList.toggle('is-active', on);
+      if (items[cursor]) { items[cursor].classList.toggle('is-active', on); }
+      if (on) {
+        bars[cursor].setAttribute('aria-current', 'true');
+        if (items[cursor]) { items[cursor].setAttribute('aria-current', 'true'); }
+      } else {
+        bars[cursor].removeAttribute('aria-current');
+        if (items[cursor]) { items[cursor].removeAttribute('aria-current'); }
+      }
+    }
+  }
+
+  function updateOutlineActive() {
+    var offsets = state.outline.offsets;
+    if (!offsets.length) { return; }
+    var threshold = window.scrollY + 36;
+    var active = 0;
+    for (var index = 0; index < offsets.length; index += 1) {
+      if (offsets[index] !== null && offsets[index] <= threshold) { active = index; }
+    }
+    var atBottom = window.scrollY + window.innerHeight
+      >= document.documentElement.scrollHeight - 6;
+    if (atBottom) { active = offsets.length - 1; }
+    setOutlineActive(active);
+  }
+
+  function scheduleOutlineActive() {
+    updateOutlineActive();
+  }
+
+  /// Called after renderDone, i.e. after Mermaid has finished inserting SVGs.
+  function finalizeOutline() {
+    if (!outlineAvailable()) { return; }
+    syncOutlineGeometry();
+    measureOutline();
+    Array.prototype.forEach.call(content.querySelectorAll('img'), function (image) {
+      if (image.complete) { return; }
+      image.addEventListener('load', scheduleOutlineMeasure);
+      image.addEventListener('error', scheduleOutlineMeasure);
+    });
+  }
+
+  /// Mirrors the native page zoom. --qdown-inv keeps the bars and panel at a
+  /// constant on-screen size while the document itself zooms.
+  function setPageZoom(value) {
+    var zoom = Number(value);
+    if (!isFinite(zoom) || zoom <= 0) { zoom = 1; }
+    state.pageZoom = zoom;
+    if (document.documentElement) {
+      document.documentElement.style.setProperty('--qdown-inv', String(1 / zoom));
+    }
+    syncOutlineGeometry();
+    measureOutline();
+    // Recompute once more after WebKit has reflowed the zoomed page.
+    setTimeout(measureOutline, 80);
+    return zoom;
+  }
+
+  function outlineDebug() {
+    var available = outlineAvailable();
+    // Resize notifications can be coalesced while the window is not on screen;
+    // resync here so diagnostics always describe the current viewport.
+    syncOutlineGeometry();
+    var zoom = state.pageZoom > 0 ? state.pageZoom : 1;
+    var widths = [];
+    var effectiveWidths = [];
+    var rectEffectiveWidths = [];
+    var levels = [];
+    var rightGaps = [];
+    var asideRect = available ? outline.getBoundingClientRect() : null;
+    var asideGap = asideRect ? (window.innerWidth - asideRect.right) * zoom : 0;
+    if (available) {
+      Array.prototype.forEach.call(outlineBars.children, function (bar, index) {
+        var visual = bar.querySelector('.qdown-outline-bar-visual') || bar;
+        // The bounding rect already includes the counter-scale; multiplying by
+        // the page zoom gives the actual on-screen width in points.
+        var width = parseFloat(getComputedStyle(visual).width) || 0;
+        var rectWidth = visual.getBoundingClientRect().width;
+        widths.push(width);
+        effectiveWidths.push(width * zoom);
+        rectEffectiveWidths.push(rectWidth * zoom);
+        levels.push(state.headings[index] ? state.headings[index].level : 0);
+        rightGaps.push(asideGap);
+      });
+    }
+    var panelRect = available ? outlinePanel.getBoundingClientRect() : null;
+    var bodyRect = document.body ? document.body.getBoundingClientRect() : null;
+    var activeHeading = state.outline.activeIndex >= 0
+      ? state.headings[state.outline.activeIndex] : null;
+    return {
+      present: available,
+      insideContent: !!(content.querySelector && content.querySelector('#qdown-outline')),
+      headingCount: state.headings.length,
+      barCount: available ? outlineBars.children.length : 0,
+      itemCount: available ? outlinePanel.children.length : 0,
+      levels: levels,
+      activeIndex: state.outline.activeIndex,
+      activeId: activeHeading ? activeHeading.id : null,
+      expanded: available ? outline.classList.contains('qdown-outline-open') : false,
+      panelVisible: available ? getComputedStyle(outlinePanel).visibility === 'visible' : false,
+      panelOpacity: available ? parseFloat(getComputedStyle(outlinePanel).opacity) : 0,
+      panelWidth: panelRect ? panelRect.width : 0,
+      panelHeight: panelRect ? panelRect.height : 0,
+      userSelect: available
+        ? (getComputedStyle(outline).userSelect || getComputedStyle(outline).webkitUserSelect || '')
+        : '',
+      compact: available ? outline.classList.contains('qdown-outline-compact') : false,
+      outlineComputedWidth: available ? getComputedStyle(outline).width : '',
+      firstVisualComputedWidth: available && outlineBars.children.length
+        ? getComputedStyle(outlineBars.children[0]
+            .querySelector('.qdown-outline-bar-visual')).width : '',
+      pageZoom: zoom,
+      barWidths: widths,
+      effectiveBarWidths: effectiveWidths,
+      rectEffectiveBarWidths: rectEffectiveWidths,
+      barRightGaps: rightGaps,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      bodyWidth: bodyRect ? bodyRect.width : 0,
+      bodyRight: bodyRect ? bodyRect.right : 0,
+      outlineRight: available ? outline.getBoundingClientRect().right : 0,
+      outlineHeight: available ? outline.getBoundingClientRect().height * zoom : 0,
+      findRangesInsideOutline: (state.find.ranges || []).filter(function (range) {
+        return available && outline.contains(range.startContainer);
+      }).length
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------------
 
@@ -595,6 +840,7 @@
     sanitize();
     addTaskListClasses();
     assignHeadingIDs();
+    buildOutline();
     message('headings', { headings: state.headings });
 
     highlightCode();
@@ -604,16 +850,35 @@
     }
 
     state.rendered = true;
+    finalizeOutline();
     var stats = debugStats();
     message('renderDone', { stats: stats });
     return stats;
   }
 
-  function scrollToHeading(id) {
+  function scrollToHeading(id, smooth) {
     var element = document.getElementById(id);
     if (!element) { return false; }
-    var top = window.scrollY + element.getBoundingClientRect().top - 18;
-    window.scrollTo(0, Math.max(0, top));
+    var top = Math.max(0, window.scrollY + element.getBoundingClientRect().top - 18);
+    if (smooth) {
+      try {
+        window.scrollTo({ top: top, behavior: 'smooth' });
+        // WebKit can pause the scroll animation while the window is occluded
+        // or the page is otherwise idle. Finish the jump if it did not move,
+        // or if the animation stalled before reaching the heading.
+        var ensure = function () {
+          if (Math.abs(window.scrollY - top) > 4) {
+            window.scrollTo(0, top);
+          }
+        };
+        setTimeout(ensure, 320);
+        setTimeout(ensure, 950);
+        return true;
+      } catch (error) {
+        errors.push('smooth scroll: ' + textOf(error));
+      }
+    }
+    window.scrollTo(0, top);
     return true;
   }
 
@@ -718,6 +983,7 @@
         bodyScrollY: window.scrollY
       },
       find: findState(),
+      outline: outlineDebug(),
       markCount: content.querySelectorAll('mark.qdown-find').length,
       cssHighlightNames: (function () {
         var names = [];
@@ -788,6 +1054,21 @@
     }
   });
 
+  // The outline follows the scroll position with one rAF-batched pass; layout
+  // changes (Mermaid, images, window resizes) re-measure the heading offsets.
+  window.addEventListener('scroll', scheduleOutlineActive, { passive: true });
+  window.addEventListener('resize', function () { scheduleOutlineMeasure(); });
+  if (typeof ResizeObserver === 'function') {
+    try {
+      var outlineResizeObserver = new ResizeObserver(function () {
+        scheduleOutlineMeasure();
+      });
+      outlineResizeObserver.observe(content);
+    } catch (error) {
+      errors.push('outline resize observer: ' + textOf(error));
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Public bridge
   // ---------------------------------------------------------------------------
@@ -803,6 +1084,13 @@
       clearFind();
     },
     scrollToHeading: scrollToHeading,
+    setPageZoom: setPageZoom,
+    setOutlineExpanded: function (expanded) {
+      if (!outlineAvailable()) { return false; }
+      outline.classList.toggle('qdown-outline-open', !!expanded);
+      return !!expanded;
+    },
+    outlineDebug: outlineDebug,
     debugStats: debugStats
   };
 
