@@ -9,8 +9,11 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
 - **Floating outline.** Every heading from h1 through h6 appears as a short
   bar along the right edge of the text column, and the bar for the section you
   are reading is highlighted. Hover the bars to open a hierarchical list;
-  clicking a bar or an entry smooth-scrolls to that heading. The outline is a
-  page overlay: it never reflows the document, is not part of ⌘F results, is
+  clicking a bar or an entry smooth-scrolls to that heading. The invisible
+  hover target extends about 44pt left of the visible bars, the expanded panel
+  overlaps it so there is no dead zone, and a 400ms grace period lets the
+  pointer travel diagonally into the panel without closing it. The outline is
+  a page overlay: it never reflows the document, is not part of ⌘F results, is
   excluded from ⌘A, and keeps a constant on-screen size at every zoom level.
 - **Find in page.** Search with ⌘F, move between matches with ⌘G and ⇧⌘G, and
   close the find bar with Esc.
@@ -114,6 +117,10 @@ runs the following checks:
   following both a programmatic jump and a bar click, the hover/test panel
   expanding without reflow, `#qdown-outline` staying outside `#content`, and ⌘F
   never matching outline text
+- Outline hover intent: the invisible hit strip is ~44pt wide (constant at
+  every page zoom), the panel overlaps the strip, leaving the merged region
+  keeps the panel open for the 400ms grace period, and re-entry cancels the
+  pending close
 - Outline zoom invariance at page zoom 0.5 / 1.0 / 1.25 / 2.5: the effective
   bar width stays constant, the bars stay inside the text column's right
   margin, and the page never overflows horizontally

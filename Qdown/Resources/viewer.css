@@ -167,6 +167,9 @@ body {
   justify-content: center;
   gap: 5px;
   max-height: 84%;
+  /* The bars themselves stay pointer targets; hit-testing for the wider hover
+     strip is done in viewer.js so it can extend left of the column without
+     stealing clicks from the document text underneath. */
   pointer-events: none;
 }
 
@@ -237,7 +240,10 @@ body {
   width: 8px;
 }
 
-/* The expanded list is an overlay: it never reflows the document. */
+/* The expanded list is an overlay: it never reflows the document. Its right
+ * edge sits 26px from the outline's right edge, overlapping the invisible
+ * 44pt hover strip (viewer.js) by 18pt so there is no dead zone between the
+ * bars and the panel. */
 .qdown-outline-panel {
   position: absolute;
   top: 50%;
@@ -257,7 +263,6 @@ body {
   transform: translate(6px, -50%);
 }
 
-#qdown-outline:hover .qdown-outline-panel,
 #qdown-outline.qdown-outline-open .qdown-outline-panel {
   opacity: 1;
   visibility: visible;

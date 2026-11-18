@@ -133,6 +133,19 @@ def main():
           f"{initial_outline.get('viewportHeight')}*{initial_outline.get('pageZoom')}")
     check(initial_outline.get("compact") is False,
           "render.initial.outlineNotCompact", str(initial_outline.get("compact")))
+    # The invisible hover target is much wider than the 24pt visible column and
+    # the panel overlaps it, so there is no dead zone between the two.
+    check(initial_outline.get("outlineHitWidth", 0) >= 40.0,
+          "render.initial.outlineHitWidth", str(initial_outline.get("outlineHitWidth")))
+    check(initial_outline.get("outlineHitWidth", 0) <= 48.0,
+          "render.initial.outlineHitWidthNotTooWide",
+          str(initial_outline.get("outlineHitWidth")))
+    check(initial_outline.get("panelOverlapsHit") is True,
+          "render.initial.outlinePanelOverlapsHit",
+          f"panelRight={initial_outline.get('panelRight')}, "
+          f"hitLeft={initial_outline.get('outlineHitLeft')}")
+    check(initial_outline.get("closeDelayMs") == 400,
+          "render.initial.outlineCloseDelay", str(initial_outline.get("closeDelayMs")))
 
     # ---- Theme colours ------------------------------------------------------
     theme = initial["theme"]
@@ -206,6 +219,10 @@ def main():
           "outline.narrow.barWidth", str(narrow_outline.get("rectEffectiveBarWidths")))
     check(min(narrow_outline.get("barRightGaps") or [0]) >= 0,
           "outline.narrow.barsInsideWindow", str(narrow_outline.get("barRightGaps")))
+    check(narrow_outline.get("outlineHitWidth", 0) >= 40.0,
+          "outline.narrow.hitWidth", str(narrow_outline.get("outlineHitWidth")))
+    check(narrow_outline.get("panelOverlapsHit") is True,
+          "outline.narrow.panelOverlapsHit")
     check(render["wide"].get("outline", {}).get("compact") is False,
           "outline.wide.notCompact")
 
@@ -246,6 +263,23 @@ def main():
           "outline.panel.height", str(expanded.get("panelHeight")))
     check(expanded.get("userSelect") == "none", "outline.panel.userSelectNone")
 
+    # Hover intent over the wider strip: opening, 400ms close grace, and
+    # cancellation when the pointer re-enters.
+    hover = render.get("outlineHover", {})
+    check(hover.get("available") is True, "outline.hover.available")
+    check(hover.get("opened") is True, "outline.hover.opensOnStrip",
+          str(hover.get("opened")))
+    check(hover.get("panelHold") is True, "outline.hover.mergedPanelRegion",
+          str(hover.get("panelHold")))
+    check(hover.get("graceOpen") is True, "outline.hover.staysOpenInGrace",
+          str(hover.get("graceOpen")))
+    check(hover.get("reentryOpened") is True, "outline.hover.reentryOpens",
+          str(hover.get("reentryOpened")))
+    check(hover.get("openAfterReentry") is True,
+          "outline.hover.reentryCancelsClose", str(hover.get("openAfterReentry")))
+    check(hover.get("closedAfterDelay") is False, "outline.hover.closesAfterDelay",
+          str(hover.get("closedAfterDelay")))
+
     # ---- Floating outline (zoom invariance) --------------------------------
     zooms = render["outlineZooms"]
     check(set(zooms.keys()) == {"0.50", "1.00", "1.25", "2.50"},
@@ -264,6 +298,11 @@ def main():
               f"outline.zoom.{key}.barsInsideViewport", str(gaps[:3]))
         check(entry.get("layout", {}).get("overflowX") is False,
               f"outline.zoom.{key}.noOverflow")
+        check(abs(outline.get("outlineHitWidth", 0) - 44.0) <= 1.5,
+              f"outline.zoom.{key}.hitWidthConstant",
+              str(outline.get("outlineHitWidth")))
+        check(outline.get("panelOverlapsHit") is True,
+              f"outline.zoom.{key}.panelOverlapsHit")
 
     # ---- Security fixture ---------------------------------------------------
     sec = security["security"]

@@ -15,6 +15,15 @@
   var outlineBars = outline ? outline.querySelector('.qdown-outline-bars') : null;
   var outlinePanel = outline ? outline.querySelector('.qdown-outline-panel') : null;
 
+  // The bars stay 24pt (18pt compact) wide. The hover target is a wider,
+  // invisible 44pt strip measured from the right edge; it is evaluated in
+  // pointer coordinates instead of being a DOM element so it can overlap the
+  // document text without intercepting selection or link clicks. The panel
+  // overlaps this strip by 18pt, and leaving the merged region closes the
+  // panel only after a short grace period.
+  var OUTLINE_HIT_WIDTH = 44;
+  var OUTLINE_CLOSE_DELAY = 400;
+
   var errors = [];
   var state = {
     token: 0,
@@ -24,7 +33,9 @@
     pageZoom: 1,
     outline: {
       offsets: [],
-      activeIndex: -1
+      activeIndex: -1,
+      pointerInside: false,
+      closeTimer: null
     },
     find: {
       query: '',
@@ -583,6 +594,83 @@
     return !!(outline && outlineBars && outlinePanel);
   }
 
+  function outlinePanelOpen() {
+    return !!(outline && outline.classList.contains('qdown-outline-open'));
+  }
+
+  /// Invisible hover target: 44 on-screen points from the outline's right
+  /// edge, spanning the bar column vertically. It is expressed in CSS pixels
+  /// (and divided by pageZoom) so the on-screen width stays constant.
+  function outlineHitRect() {
+    if (!outlineAvailable()) { return null; }
+    var zoom = state.pageZoom > 0 ? state.pageZoom : 1;
+    var outlineRect = outline.getBoundingClientRect();
+    var barsRect = outlineBars.getBoundingClientRect();
+    return {
+      left: outlineRect.right - (OUTLINE_HIT_WIDTH / zoom),
+      right: outlineRect.right,
+      top: barsRect.top,
+      bottom: barsRect.bottom
+    };
+  }
+
+  /// The merged hover region is the expanded panel plus the invisible bar
+  /// strip. The panel's right edge overlaps the strip, so a diagonal move from
+  /// a bar to the panel never crosses a dead zone.
+  function outlineHitTest(x, y) {
+    if (!outlineAvailable() || outline.hidden) { return false; }
+    var hit = outlineHitRect();
+    if (hit && x >= hit.left && x <= hit.right && y >= hit.top && y <= hit.bottom) {
+      return true;
+    }
+    if (outlinePanelOpen()) {
+      var panelRect = outlinePanel.getBoundingClientRect();
+      if (x >= panelRect.left && x <= panelRect.right
+          && y >= panelRect.top && y <= panelRect.bottom) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function cancelOutlineClose() {
+    if (state.outline.closeTimer !== null) {
+      clearTimeout(state.outline.closeTimer);
+      state.outline.closeTimer = null;
+    }
+  }
+
+  function scheduleOutlineClose() {
+    cancelOutlineClose();
+    state.outline.closeTimer = setTimeout(function () {
+      state.outline.closeTimer = null;
+      state.outline.pointerInside = false;
+      if (outline) { outline.classList.remove('qdown-outline-open'); }
+    }, OUTLINE_CLOSE_DELAY);
+  }
+
+  function handleOutlinePointerMove(event) {
+    if (!outlineAvailable() || outline.hidden) { return; }
+    if (outlineHitTest(event.clientX, event.clientY)) {
+      state.outline.pointerInside = true;
+      cancelOutlineClose();
+      if (!outlinePanelOpen()) {
+        outline.classList.add('qdown-outline-open');
+      }
+    } else if (state.outline.pointerInside) {
+      state.outline.pointerInside = false;
+      scheduleOutlineClose();
+    }
+  }
+
+  function handleOutlinePointerOut(event) {
+    // A relatedTarget means the pointer merely moved between page elements;
+    // only a real exit from the web view starts the close timer.
+    if (event.relatedTarget || !state.outline.pointerInside) { return; }
+    state.outline.pointerInside = false;
+    scheduleOutlineClose();
+  }
+
   function outlineLevelClass(level) {
     return 'qdown-outline-level-' + level;
   }
@@ -625,6 +713,11 @@
     });
 
     outline.hidden = state.headings.length === 0;
+    if (outline.hidden) {
+      cancelOutlineClose();
+      state.outline.pointerInside = false;
+      outline.classList.remove('qdown-outline-open');
+    }
     state.outline.activeIndex = -1;
     state.outline.offsets = [];
     syncOutlineGeometry();
@@ -767,6 +860,7 @@
       });
     }
     var panelRect = available ? outlinePanel.getBoundingClientRect() : null;
+    var hitRect = available ? outlineHitRect() : null;
     var bodyRect = document.body ? document.body.getBoundingClientRect() : null;
     var activeHeading = state.outline.activeIndex >= 0
       ? state.headings[state.outline.activeIndex] : null;
@@ -784,6 +878,12 @@
       panelOpacity: available ? parseFloat(getComputedStyle(outlinePanel).opacity) : 0,
       panelWidth: panelRect ? panelRect.width : 0,
       panelHeight: panelRect ? panelRect.height : 0,
+      panelRight: panelRect ? panelRect.right : 0,
+      outlineHitWidth: hitRect ? (hitRect.right - hitRect.left) * zoom : 0,
+      outlineHitLeft: hitRect ? hitRect.left : 0,
+      panelOverlapsHit: !!(hitRect && panelRect && panelRect.right >= hitRect.left - 0.5),
+      closeDelayMs: OUTLINE_CLOSE_DELAY,
+      closePending: state.outline.closeTimer !== null,
       userSelect: available
         ? (getComputedStyle(outline).userSelect || getComputedStyle(outline).webkitUserSelect || '')
         : '',
@@ -1058,6 +1158,11 @@
   // changes (Mermaid, images, window resizes) re-measure the heading offsets.
   window.addEventListener('scroll', scheduleOutlineActive, { passive: true });
   window.addEventListener('resize', function () { scheduleOutlineMeasure(); });
+  // Hover intent: the hit strip and the expanded panel form one merged region.
+  // Once the pointer leaves it, the panel stays open for a short grace period
+  // so a diagonal move from a bar into the panel cannot close it.
+  window.addEventListener('mousemove', handleOutlinePointerMove, { passive: true });
+  window.addEventListener('mouseout', handleOutlinePointerOut, { passive: true });
   if (typeof ResizeObserver === 'function') {
     try {
       var outlineResizeObserver = new ResizeObserver(function () {
@@ -1087,7 +1192,13 @@
     setPageZoom: setPageZoom,
     setOutlineExpanded: function (expanded) {
       if (!outlineAvailable()) { return false; }
-      outline.classList.toggle('qdown-outline-open', !!expanded);
+      cancelOutlineClose();
+      if (expanded) {
+        outline.classList.add('qdown-outline-open');
+      } else {
+        state.outline.pointerInside = false;
+        outline.classList.remove('qdown-outline-open');
+      }
       return !!expanded;
     },
     outlineDebug: outlineDebug,

@@ -198,6 +198,75 @@ enum RenderTestRunner {
         let outlineExpandedStats = await stats(from: webView)
         _ = await evaluate(webView, "window.qdown.setOutlineExpanded(false);")
 
+        // Hover intent: the invisible bar strip is wider than the visible bars
+        // and the expanded panel overlaps it. Leaving the merged hover region
+        // keeps the panel open for a 400ms grace period; re-entry cancels the
+        // pending close. Synthetic mouse events exercise the real listeners.
+        let outlineHoverEnter = await evaluate(webView, """
+            (function(){
+              var o=document.getElementById('qdown-outline');
+              var b=o.querySelector('.qdown-outline-bar');
+              if(!b){return {available:false};}
+              var r=b.getBoundingClientRect();
+              window.dispatchEvent(new MouseEvent('mousemove',
+                {bubbles:true,clientX:r.right-2,clientY:r.top+r.height/2}));
+              return {available:true,expanded:o.classList.contains('qdown-outline-open')};
+            })()
+            """) as? [String: Any] ?? [:]
+        // Moving from the strip into the expanded panel keeps the merged
+        // region hovered (the panel overlaps the strip).
+        let outlineHoverPanel = await evaluate(webView, """
+            (function(){
+              var o=document.getElementById('qdown-outline');
+              var p=o.querySelector('.qdown-outline-panel');
+              if(!p){return false;}
+              var r=p.getBoundingClientRect();
+              window.dispatchEvent(new MouseEvent('mousemove',
+                {bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));
+              return o.classList.contains('qdown-outline-open');
+            })()
+            """) as? Bool ?? false
+        _ = await evaluate(webView, """
+            window.dispatchEvent(new MouseEvent('mousemove',
+              {bubbles:true,clientX:5,clientY:5}));
+            """)
+        await delay(0.12)
+        let outlineHoverGrace = await evaluate(webView,
+            "document.getElementById('qdown-outline').classList.contains('qdown-outline-open')")
+            as? Bool ?? false
+        let outlineHoverReentry = await evaluate(webView, """
+            (function(){
+              var o=document.getElementById('qdown-outline');
+              var b=o.querySelector('.qdown-outline-bar');
+              if(!b){return false;}
+              var r=b.getBoundingClientRect();
+              window.dispatchEvent(new MouseEvent('mousemove',
+                {bubbles:true,clientX:r.right-2,clientY:r.top+r.height/2}));
+              return o.classList.contains('qdown-outline-open');
+            })()
+            """) as? Bool ?? false
+        await delay(0.7)
+        let outlineHoverAfterReentry = await evaluate(webView,
+            "document.getElementById('qdown-outline').classList.contains('qdown-outline-open')")
+            as? Bool ?? false
+        _ = await evaluate(webView, """
+            window.dispatchEvent(new MouseEvent('mousemove',
+              {bubbles:true,clientX:5,clientY:5}));
+            """)
+        await delay(1.6)
+        let outlineHoverClosed = await evaluate(webView,
+            "document.getElementById('qdown-outline').classList.contains('qdown-outline-open')")
+            as? Bool ?? true
+        let outlineHover: [String: Any] = [
+            "available": outlineHoverEnter["available"] ?? false,
+            "opened": outlineHoverEnter["expanded"] ?? false,
+            "panelHold": outlineHoverPanel,
+            "graceOpen": outlineHoverGrace,
+            "reentryOpened": outlineHoverReentry,
+            "openAfterReentry": outlineHoverAfterReentry,
+            "closedAfterDelay": outlineHoverClosed,
+        ]
+
         let narrowStats = await resize(window: window, webView: webView, width: 520)
         let compactStats = await resize(window: window, webView: webView, width: 380)
         let wideStats = await resize(window: window, webView: webView, width: 1400)
@@ -246,6 +315,7 @@ enum RenderTestRunner {
             "outlineAfterScroll": outlineAfterScroll,
             "outlineClick": outlineClickStats,
             "outlineExpanded": outlineExpandedStats,
+            "outlineHover": outlineHover,
             "outlineZooms": outlineZooms,
             "security": security,
         ]
