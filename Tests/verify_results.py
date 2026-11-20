@@ -350,6 +350,19 @@ def main():
           str(chrome.get("nativeTabBarVisible")))
     check(chrome.get("contentDragRegionAcceptsMouse") is True,
           "chrome.contentDragRegionAcceptsMouse")
+    # Regression: the drag handle must be found through the real content-view
+    # hit-test path, at the top edge, spanning the titlebar safe area. Testing
+    # the view's own bounds had previously hidden a coordinate-space bug.
+    check(chrome.get("contentDragRegionHitIsDragHandle") is True,
+          "chrome.contentDragRegionHitIsDragHandle")
+    check(chrome.get("contentDragRegionTopInWindow", -1) == 0,
+          "chrome.contentDragRegionTopInWindow",
+          str(chrome.get("contentDragRegionTopInWindow")))
+    check(chrome.get("contentDragRegionHeight", -1) == safe_top,
+          "chrome.contentDragRegionHeight",
+          str(chrome.get("contentDragRegionHeight")))
+    check(chrome.get("contentDragRegionHandoff") == "performDrag",
+          "chrome.contentDragRegionHandoff", str(chrome.get("contentDragRegionHandoff")))
     check(chrome.get("webViewTop", -1) >= safe_top, "chrome.webViewTop",
           str(chrome.get("webViewTop")))
     check(chrome.get("findBarTop", -1) >= safe_top, "chrome.findBarTop",
@@ -435,6 +448,17 @@ def main():
           "tabs.chrome.webViewClearOfTabBar", str(tabs_chrome.get("webViewTop")))
     check(tabs_chrome.get("contentDragRegionAcceptsMouse") is True,
           "tabs.chrome.contentDragRegionAcceptsMouse")
+    check(tabs_chrome.get("contentDragRegionHitIsDragHandle") is True,
+          "tabs.chrome.contentDragRegionHitIsDragHandle")
+    check(tabs_chrome.get("contentDragRegionTopInWindow", -1) == 0,
+          "tabs.chrome.contentDragRegionTopInWindow",
+          str(tabs_chrome.get("contentDragRegionTopInWindow")))
+    check(tabs_chrome.get("contentDragRegionHeight", -1) == tab_safe_top,
+          "tabs.chrome.contentDragRegionHeight",
+          str(tabs_chrome.get("contentDragRegionHeight")))
+    check(tabs_chrome.get("contentDragRegionHandoff") == "performDrag",
+          "tabs.chrome.contentDragRegionHandoff",
+          str(tabs_chrome.get("contentDragRegionHandoff")))
     check(tabs_chrome.get("title") in opened.get("titles", []),
           "tabs.chrome.filenameStillAvailable", str(tabs_chrome.get("title")))
 
@@ -510,6 +534,14 @@ def main():
           "tabs.close.webViewTop", str(close_chrome.get("webViewTop")))
     check(close_chrome.get("contentDragRegionAcceptsMouse") is True,
           "tabs.close.contentDragRegionAcceptsMouse")
+    check(close_chrome.get("contentDragRegionHitIsDragHandle") is True,
+          "tabs.close.contentDragRegionHitIsDragHandle")
+    check(close_chrome.get("contentDragRegionTopInWindow", -1) == 0,
+          "tabs.close.contentDragRegionTopInWindow",
+          str(close_chrome.get("contentDragRegionTopInWindow")))
+    check(close_chrome.get("contentDragRegionHeight", -1) == 28,
+          "tabs.close.contentDragRegionHeight",
+          str(close_chrome.get("contentDragRegionHeight")))
 
     # ---- Real LaunchServices (Finder double-click style) open events --------
     check(live_tabs["documentCount"] == 2, "liveTabs.documentCount",

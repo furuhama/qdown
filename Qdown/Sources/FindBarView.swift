@@ -251,12 +251,50 @@ final class ContentViewController: NSViewController {
     // MARK: - Headerless chrome geometry
 
     /// True when the blank strip above the page is a window drag handle.
+    ///
+    /// This deliberately goes through the same coordinate path AppKit uses for
+    /// a real mouse-down: `hitTest(_:)` takes a point in the *superview's*
+    /// coordinate system, so testing the drag view's own bounds directly would
+    /// report a false positive even when clicks never reach the handle.
     var dragRegionAcceptsMouse: Bool {
-        guard view.window != nil else { return false }
+        dragRegionHitIsDragHandle
+    }
+
+    /// Whether a click at the centre of the top strip resolves to the drag
+    /// handle when hit-tested through the content view (the real event path).
+    var dragRegionHitIsDragHandle: Bool {
+        guard let window = view.window, let content = window.contentView else { return false }
         view.layoutSubtreeIfNeeded()
         guard topDragView.frame.height > 0 else { return false }
-        let point = NSPoint(x: topDragView.bounds.midX, y: topDragView.bounds.midY)
-        return topDragView.mouseDownCanMoveWindow && topDragView.hitTest(point) === topDragView
+        let center = NSPoint(x: topDragView.bounds.midX, y: topDragView.bounds.midY)
+        return view.hitTest(topDragView.convert(center, to: content)) === topDragView
+    }
+
+    /// Height of the headerless drag strip. It follows the safe area, which
+    /// AppKit recomputes for the current titlebar/tab bar.
+    var dragRegionHeight: CGFloat {
+        view.layoutSubtreeIfNeeded()
+        return topDragView.frame.height
+    }
+
+    /// Distance from the window's top edge to the drag strip.
+    var dragRegionTopInWindow: CGFloat {
+        guard let window = view.window, let content = window.contentView else { return -1 }
+        view.layoutSubtreeIfNeeded()
+        let rect = topDragView.convert(topDragView.bounds, to: content)
+        return content.bounds.height - rect.maxY
+    }
+
+    /// Re-resolves per-screen geometry after the window moves to another
+    /// display. Safe-area values (native tab bar height) and the backing scale
+    /// are screen-dependent; nothing here caches them, but the layout and the
+    /// WebView display must be invalidated so AppKit/WebKit pick up the new
+    /// screen's values instead of drawing at the old scale.
+    func refreshScreenGeometry() {
+        guard view.window != nil else { return }
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        webView.needsDisplay = true
     }
 
     /// Distance from the window's top edge to the WebView. With tabs AppKit's
@@ -359,14 +397,29 @@ final class ContentViewController: NSViewController {
 }
 
 
-/// An otherwise empty view whose drag moves the window. Standard AppKit
-/// `mouseDownCanMoveWindow` behaviour keeps the chrome headerless while still
-/// letting the user reposition the window by its top strip.
+/// The blank strip above the page. It forwards the actual mouse-down event to
+/// `NSWindow.performDrag(with:)`, AppKit's standard window-drag entry point.
+///
+/// Do not use the implicit `mouseDownCanMoveWindow` path here. AppKit builds
+/// and caches the window's draggable region from the view hierarchy; with a
+/// `fullSizeContentView` window that region is assembled again when the window
+/// crosses a display with a different backing scale, and the cached grab point
+/// can stop matching the cursor. `performDrag` hands the drag to the window
+/// server with this event's screen location, so the offset captured at
+/// mouse-down stays valid for the whole drag.
 final class WindowDragView: NSView {
-    override var mouseDownCanMoveWindow: Bool { true }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0, bounds.contains(point) else { return nil }
-        return self
+    /// Diagnostic label used by the verification harness.
+    static let dragHandoff = "performDrag"
+
+    /// A drag handle must not also opt into AppKit's implicit background drag.
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    /// A titlebar-like handle starts moving the window even when the window is
+    /// not key yet; the drag itself also activates the window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }

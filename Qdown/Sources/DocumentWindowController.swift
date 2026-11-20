@@ -297,6 +297,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             "titlebarHeight": window.map { $0.frame.height - $0.contentLayoutRect.height } ?? 0,
             "contentSafeAreaTop": window?.contentView?.safeAreaInsets.top ?? 0,
             "contentDragRegionAcceptsMouse": contentPane.dragRegionAcceptsMouse,
+            "contentDragRegionHitIsDragHandle": contentPane.dragRegionHitIsDragHandle,
+            "contentDragRegionHeight": contentPane.dragRegionHeight,
+            "contentDragRegionTopInWindow": contentPane.dragRegionTopInWindow,
+            "contentDragRegionHandoff": WindowDragView.dragHandoff,
             "webViewTop": contentPane.webViewTopInWindow,
             "findBarTop": contentPane.findBarTopInWindow,
             // AppKit owns the tab bar now. With one document it is hidden and
@@ -314,6 +318,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     // MARK: - NSWindowDelegate
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        // The titlebar/tab-bar safe area is screen-dependent. Resolve it again
+        // on the new screen; never carry over geometry from the previous one.
+        contentPane.refreshScreenGeometry()
+    }
+
+    func windowDidChangeBackingProperties(_ notification: Notification) {
+        // A Retina <-> non-Retina move changes backingScaleFactor. Re-layout
+        // and redraw so no view keeps rendering at the old scale.
+        contentPane.refreshScreenGeometry()
+    }
 
     func windowWillClose(_ notification: Notification) {
         webView.clearFind()

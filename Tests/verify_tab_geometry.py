@@ -68,16 +68,37 @@ def load_with_sips(path):
     width, height = struct.unpack_from("<ii", data, 18)
     planes, depth = struct.unpack_from("<HH", data, 26)
     compression = struct.unpack_from("<I", data, 30)[0]
-    if planes != 1 or compression != 0 or depth not in (24, 32):
+    # BI_RGB (0) is the classic layout. Newer `sips` builds write a 32-bit
+    # BI_BITFIELDS (3) BMP with explicit channel masks; accept that too so the
+    # fallback still works on machines without Pillow.
+    if planes != 1 or depth not in (24, 32):
+        raise ValueError(f"unsupported BMP: depth={depth} compression={compression}")
+    masks = None
+    if compression == 3:
+        if depth != 32 or header_size < 56:
+            raise ValueError(f"unsupported BMP: depth={depth} compression={compression}")
+        red_mask, green_mask, blue_mask = struct.unpack_from("<III", data, 54)
+        masks = (red_mask, green_mask, blue_mask)
+    elif compression != 0:
         raise ValueError(f"unsupported BMP: depth={depth} compression={compression}")
     top_down = height < 0
     height = abs(height)
     row_bytes = ((width * depth + 31) // 32) * 4
     bytes_per_pixel = depth // 8
 
+    def mask_channel(value, mask):
+        if mask == 0:
+            return 0
+        shift = (mask & -mask).bit_length() - 1
+        maximum = mask >> shift
+        return ((value & mask) >> shift) * 255 // maximum
+
     def pixel(x, y):
         row = y if top_down else height - 1 - y
         index = offset + row * row_bytes + x * bytes_per_pixel
+        if masks:
+            value = int.from_bytes(data[index:index + 4], "little")
+            return tuple(mask_channel(value, mask) for mask in masks)
         blue, green, red = data[index:index + 3]
         return (red, green, blue)
 
@@ -208,6 +229,17 @@ def main():
               f"top={top_center}, page={page_color}")
         check(chrome.get("contentDragRegionAcceptsMouse") is True,
               "realSingle.dragRegionAcceptsMouse")
+        check(chrome.get("contentDragRegionHitIsDragHandle") is True,
+              "realSingle.dragRegionHitIsDragHandle")
+        check(chrome.get("contentDragRegionTopInWindow", -1) == 0,
+              "realSingle.dragRegionTopInWindow",
+              f"{chrome.get('contentDragRegionTopInWindow')}")
+        check(chrome.get("contentDragRegionHeight", -1) == 28,
+              "realSingle.dragRegionHeight",
+              f"{chrome.get('contentDragRegionHeight')}")
+        check(chrome.get("contentDragRegionHandoff") == "performDrag",
+              "realSingle.dragRegionHandoff",
+              str(chrome.get("contentDragRegionHandoff")))
 
     finish()
 
