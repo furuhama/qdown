@@ -19,6 +19,14 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
   close the find bar with Esc.
 - **Persistent zoom.** Zoom the document with ⌘+ and ⌘−, or reset to actual size
   with ⌘0. The zoom level is stored in `UserDefaults`.
+- **Live reload.** Qdown watches the open document's path and its parent
+  directory. When another editor writes the file, the page reloads after a
+  short debounce. Atomic saves (write a sibling, then `rename` over the
+  document) are detected because the path is re-resolved after every event,
+  not just the original file descriptor. Scroll position and zoom survive the
+  reload, unchanged contents (an mtime-only touch) do not re-render, deleting
+  the file keeps the last display, and recreating the same path reloads it.
+  Background tabs update without taking focus.
 - **Native window tabs.** Open several Markdown files as tabs in one window
   using AppKit's standard `NSWindow` tab bar. Detach, merge, ⌃Tab, Close Tab,
   the Window menu, and LaunchServices opens all use the system behaviour, and
@@ -131,6 +139,11 @@ runs the following checks:
 - Native window smoke tests: multiple windows, outline heading counts, match
   count, zoom persistence, outline clicks, and relative Markdown links opening
   as tabs in the same window
+- Live reload: an in-place write and an atomic sibling-file `rename` both
+  replace the DOM text, scroll position and zoom are preserved across the
+  re-render, an mtime-only touch does not re-render, deleting the file keeps
+  the last display, and recreating the path reloads it without changing the
+  key window
 - Window-tab checks: two documents open into one window with two tabs whose
   titles are the file names, per-tab outline state, and scroll position
   preserved across tab switches
@@ -217,7 +230,7 @@ Common environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `QDOWNTEST_MODE` | `render`, `smoke`, `tabs`, `live-tabs`, or `window` |
+| `QDOWNTEST_MODE` | `render`, `smoke`, `tabs`, `live-tabs`, `live-reload`, or `window` |
 | `QDOWNTEST_MARKDOWN` | Markdown file to render |
 | `QDOWNTEST_JSON` | Output path for the result JSON |
 | `QDOWNTEST_SNAPSHOT` / `_DIAGRAM` / `_SECTION` | PNG snapshot output paths |
@@ -228,6 +241,7 @@ Common environment variables:
 | `QDOWNTEST_ZOOM_READ_ONLY` | `1` reads the UserDefaults zoom value without modifying it |
 | `QDOWNTEST_LINK` | `1` verifies that a relative link opens a new tab in the same window |
 | `QDOWNTEST_EXPECT_COUNT` | Documents expected from LaunchServices open events (`live-tabs`) |
+| `QDOWNTEST_LIVE_FILE` | Fixture path rewritten by the `live-reload` harness |
 | `QDOWNTEST_SCREEN_ONLY` | `1` stops the tabs harness after the initial 2+ tab window is stable (real-screen capture) |
 | `QDOWNTEST_SCREEN_JSON` | JSON output path for the screen-only mode (includes `windowNumber`) |
 | `QDOWNTEST_HOLD_SECONDS` | Keeps the screen harness alive for an external `screencapture` |
@@ -245,7 +259,8 @@ Qdown/
   Sources/
     main.swift               # NSApplication startup (no storyboard)
     AppDelegate.swift        # Menus, file opening, default-app registration
-    Document.swift           # NSDocument, text encoding detection
+    Document.swift           # NSDocument, text encoding detection, live reload hook
+    DocumentFileWatcher.swift # Path-based kqueue watcher (directory + file)
     DocumentOpenCoordinator.swift # Same-window tab opening policy for all entry points
     DocumentWindowController.swift
     MarkdownWebView.swift    # WKWebView, JS bridge, drag and drop
@@ -253,7 +268,7 @@ Qdown/
     FindBarView.swift        # Find bar and content view (page reaches the top edge)
     LinkRouter.swift
     ZoomStore.swift
-    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke / tabs / live-tabs / window
+    RenderTestRunner.swift   # QDOWNTEST_MODE=render / smoke / tabs / live-tabs / live-reload / window
   Resources/
     quiet-light.css          # Canonical theme; not modified
     viewer.html / viewer.css / viewer.js  # Markdown page + floating outline
@@ -299,7 +314,7 @@ Full license texts are included under `Qdown/Resources/vendor/`.
 
 ## Limitations
 
-- Qdown is a viewer. It does not reload files when they change on disk, edit
-  documents, print or export PDFs, or preview documents in Quick Look.
+- Qdown is a viewer. It does not edit documents, print or export PDFs, or
+  preview documents in Quick Look.
 - A relative Markdown link that points to a document already open may reuse the
   existing window, depending on `NSDocumentController` behavior.

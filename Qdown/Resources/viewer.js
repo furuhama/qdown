@@ -914,6 +914,11 @@
   // ---------------------------------------------------------------------------
 
   async function render(markdown, baseHref) {
+    // Live reload replaces #content; the reader's position is a page-level
+    // concern, so save it here and restore it once the replacement, code
+    // highlighting, and Mermaid have finished changing the layout. The initial
+    // render starts at 0, so this is a no-op on first display.
+    var previousScrollY = window.scrollY || 0;
     var token = state.token + 1;
     state.token = token;
     state.rendered = false;
@@ -948,6 +953,10 @@
     if (token !== state.token) {
       return { cancelled: true };
     }
+
+    var maximumScrollY = Math.max(0,
+      document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo(0, Math.min(previousScrollY, maximumScrollY));
 
     state.rendered = true;
     finalizeOutline();

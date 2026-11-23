@@ -339,6 +339,20 @@ final class ContentViewController: NSViewController {
         view.window?.makeFirstResponder(webView)
     }
 
+    /// Clears the find state after a live reload. Search state is intentionally
+    /// not preserved, and unlike `hideFind()` this never changes the first
+    /// responder, so a background reload cannot take focus.
+    func resetFindForReload() {
+        webView.clearFind()
+        findQuery = ""
+        findBar.searchField.stringValue = ""
+        findBar.update(count: 0, current: 0, query: "")
+        if !findBar.isHidden {
+            findBar.isHidden = true
+            view.layoutSubtreeIfNeeded()
+        }
+    }
+
     func findNext() {
         guard !findBar.isHidden else {
             showFind()

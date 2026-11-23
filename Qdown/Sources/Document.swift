@@ -4,9 +4,21 @@ final class Document: NSDocument {
 
     private(set) var markdown: String = ""
 
+    /// Watches the document path (and its parent directory) so on-disk edits,
+    /// including atomic saves, update the displayed document.
+    private var fileWatcher: DocumentFileWatcher?
+
+    /// Number of times the document contents changed on disk and were applied.
+    /// Exposed through the window controller for the verification harness.
+    private(set) var liveReloadCount = 0
+
     override init() {
         super.init()
         hasUndoManager = false
+    }
+
+    deinit {
+        fileWatcher?.stop()
     }
 
     override class var autosavesInPlace: Bool {
@@ -30,10 +42,62 @@ final class Document: NSDocument {
         if let window = controller.window {
             DocumentOpenCoordinator.attachToExistingWindow(window)
         }
+        startWatchingFile()
     }
 
     override func read(from data: Data, ofType typeName: String) throws {
         markdown = TextDecoder.decode(data)
+        // A manual `Document()` open sets fileURL before calling read. Starting
+        // here also covers an edit that lands between read and window creation.
+        startWatchingFile()
+    }
+
+    // MARK: - Live reload
+
+    func startWatchingFile() {
+        guard fileWatcher == nil, let fileURL else { return }
+        let watcher = DocumentFileWatcher(fileURL: fileURL)
+        watcher.onChange = { [weak self] data in
+            self?.handleFileChange(data)
+        }
+        fileWatcher = watcher
+        watcher.start()
+    }
+
+    func stopWatchingFile() {
+        fileWatcher?.stop()
+        fileWatcher = nil
+    }
+
+    private func handleFileChange(_ data: Data?) {
+        // A missing path keeps the last display. The directory watcher still
+        // runs, so recreating the same path reloads it.
+        guard let data, let fileURL else { return }
+
+        let text = TextDecoder.decode(data)
+        // mtime-only changes (touch, metadata updates, an editor rewriting
+        // identical bytes) must not re-render the page.
+        guard text != markdown else { return }
+
+        markdown = text
+        liveReloadCount += 1
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+           let date = attributes[.modificationDate] as? Date {
+            // Keep NSDocument's notion of the on-disk file in sync so it does
+            // not treat this known change as an external edit.
+            fileModificationDate = date
+        }
+
+        // Re-render through the normal marked -> viewer.html path. Focus is
+        // untouched: no window is ordered front or made key here.
+        for case let controller as DocumentWindowController in windowControllers {
+            controller.applyLiveReload()
+        }
+    }
+
+    override func close() {
+        stopWatchingFile()
+        super.close()
     }
 
     // Qdown is a viewer. These documents are intentionally never written back.

@@ -72,6 +72,7 @@ def main():
     smoke_two = load_json_with_prefix(out / "smoke-two.stdout", "QDOWNSMOKE")
     smoke_zoom = load_json_with_prefix(out / "smoke-zoom.stdout", "QDOWNSMOKE")
     smoke_link = load_json_with_prefix(out / "smoke-link.stdout", "QDOWNSMOKE")
+    live_reload = json.loads((out / "live-reload.json").read_text())
     tabs = json.loads((out / "tabs.json").read_text())
     tabs_screen = json.loads((out / "tabs-screen.json").read_text())
     live_tabs = json.loads((out / "live-tabs.json").read_text())
@@ -316,6 +317,59 @@ def main():
           str(security["initial"]["blockedImageCount"]))
     check(security["initial"]["imageLoadedCount"] == 1, "security.localImageLoaded",
           str(security["initial"]["imageLoadedCount"]))
+
+    # ---- Live reload --------------------------------------------------------
+    check(live_reload.get("mode") == "live-reload", "liveReload.mode",
+          str(live_reload.get("mode")))
+    initial_lr = live_reload["initial"]
+    check(initial_lr.get("markerFound") is True, "liveReload.initial.marker")
+    check(initial_lr.get("renderCount", 0) >= 1, "liveReload.initial.rendered",
+          str(initial_lr.get("renderCount")))
+    check(initial_lr.get("headingCount", 0) >= 40, "liveReload.initial.headingCount",
+          str(initial_lr.get("headingCount")))
+    check(initial_lr.get("scrollY", 0) > 0, "liveReload.initial.scrollable",
+          str(initial_lr.get("scrollY")))
+
+    in_place = live_reload["inPlace"]
+    check(in_place.get("updated") is True, "liveReload.inPlace.updated")
+    check(in_place.get("markerFound") is True, "liveReload.inPlace.domUpdated")
+    check(in_place.get("renderCountIncreased") is True,
+          "liveReload.inPlace.rerendered", str(in_place.get("renderCount")))
+    check(in_place.get("scrollPreserved") is True, "liveReload.inPlace.scrollPreserved",
+          f"{in_place.get('scrollBefore')} -> {in_place.get('scrollY')}")
+    check(in_place.get("zoomPreserved") is True, "liveReload.inPlace.zoomPreserved",
+          str(in_place.get("pageZoom")))
+
+    atomic = live_reload["atomic"]
+    check(atomic.get("updated") is True, "liveReload.atomic.updated")
+    check(atomic.get("markerFound") is True, "liveReload.atomic.domUpdated")
+    check(atomic.get("renderCountIncreased") is True,
+          "liveReload.atomic.rerendered", str(atomic.get("renderCount")))
+    check(atomic.get("scrollPreserved") is True, "liveReload.atomic.scrollPreserved",
+          f"{atomic.get('scrollBefore')} -> {atomic.get('scrollY')}")
+    check(atomic.get("zoomPreserved") is True, "liveReload.atomic.zoomPreserved",
+          str(atomic.get("pageZoom")))
+
+    mtime_only = live_reload["mtimeOnly"]
+    check(mtime_only.get("unchanged") is True, "liveReload.mtimeOnly.noRerender",
+          f"{mtime_only.get('renderCountBefore')} -> {mtime_only.get('renderCount')}")
+    check(mtime_only.get("markerStillAtomic") is True,
+          "liveReload.mtimeOnly.contentUnchanged")
+
+    deleted = live_reload["deleted"]
+    check(deleted.get("keptLastContent") is True, "liveReload.deleted.keepsLastContent")
+    check(deleted.get("renderCountUnchanged") is True,
+          "liveReload.deleted.noRerender", str(deleted.get("renderCount")))
+
+    recreated = live_reload["recreated"]
+    check(recreated.get("updated") is True, "liveReload.recreated.updated")
+    check(recreated.get("markerFound") is True, "liveReload.recreated.domUpdated")
+    check(recreated.get("renderCountIncreased") is True,
+          "liveReload.recreated.rerendered", str(recreated.get("renderCount")))
+
+    focus = live_reload["focus"]
+    check(focus.get("preserved") is True, "liveReload.focus.preserved", str(focus))
+    check(live_reload.get("logs") == [], "liveReload.logs", str(live_reload.get("logs")))
 
     # ---- Native windows -----------------------------------------------------
     check(smoke_two["windowTitles"] == ["test.md", "other.md"],

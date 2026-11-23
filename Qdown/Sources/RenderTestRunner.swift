@@ -25,6 +25,7 @@ enum RenderTestRunner {
         case smoke
         case tabs
         case liveTabs
+        case liveReload
         case window
     }
 
@@ -34,12 +35,14 @@ enum RenderTestRunner {
             if raw == "smoke" { return .smoke }
             if raw == "tabs" { return .tabs }
             if raw == "live-tabs" { return .liveTabs }
+            if raw == "live-reload" || raw == "live" { return .liveReload }
             if raw == "window" { return .window }
         }
         let arguments = CommandLine.arguments
         if arguments.contains("--smoke-test") { return .smoke }
         if arguments.contains("--tabs-test") { return .tabs }
         if arguments.contains("--live-tabs-test") { return .liveTabs }
+        if arguments.contains("--live-reload-test") { return .liveReload }
         if arguments.contains(where: { $0 == "--render-test" || $0.hasPrefix("--render-test=") }) {
             return .render
         }
@@ -83,6 +86,8 @@ enum RenderTestRunner {
             runTabTest(arguments: arguments)
         case .liveTabs:
             runLiveTabsTest(arguments: arguments)
+        case .liveReload:
+            runLiveReloadTest(arguments: arguments)
         case .window:
             runWindowTest(arguments: arguments)
         case nil:
@@ -838,6 +843,281 @@ enum RenderTestRunner {
                   to: setting("QDOWNTEST_JSON", flag: "--live-tabs-json", in: arguments),
                   label: "QDOWNTABS")
             exit(0)
+        }
+    }
+
+    // MARK: - Live reload test
+
+    /// Exercises the production `Document` + `DocumentFileWatcher` path:
+    ///
+    /// 1. open a real file and scroll away from the top,
+    /// 2. rewrite it in place -> DOM shows the new text, scroll/zoom are kept,
+    /// 3. write a sibling and `rename` it over the document (atomic save),
+    /// 4. touch only the mtime -> no re-render,
+    /// 5. delete the file -> the last display is kept,
+    /// 6. recreate the same path -> the page reloads again.
+    private static func runLiveReloadTest(arguments: [String]) {
+        let fixturePath = setting("QDOWNTEST_LIVE_FILE",
+                                  flag: "--live-reload-file",
+                                  in: arguments)
+            ?? "build/test-output/live-reload/fixture.md"
+        let fileURL = URL(fileURLWithPath: fixturePath).standardizedFileURL
+        let jsonPath = setting("QDOWNTEST_JSON", flag: "--live-reload-json", in: arguments)
+
+        let initialMarker = "LIVE-MARKER-INITIAL"
+        let inPlaceMarker = "LIVE-MARKER-INPLACE"
+        let atomicMarker = "LIVE-MARKER-ATOMIC"
+        let recreatedMarker = "LIVE-MARKER-RECREATED"
+
+        do {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try Data(liveReloadMarkdown(marker: initialMarker).utf8).write(to: fileURL, options: .atomic)
+        } catch {
+            fail("cannot prepare live-reload fixture: \(error.localizedDescription)")
+        }
+
+        _ = NSDocumentController.shared
+
+        Task { @MainActor in
+            // The app may have restored a previous session's documents. They
+            // are not part of this test and must not interfere with the window
+            // focus checks below.
+            await delay(0.6)
+            closeUnexpectedDocuments(keeping: [])
+
+            let document = Document()
+            document.fileURL = fileURL
+            do {
+                let data = try Data(contentsOf: fileURL)
+                try document.read(from: data, ofType: "net.daringfireball.markdown")
+            } catch {
+                fail("cannot read live-reload fixture: \(error.localizedDescription)")
+            }
+            document.makeWindowControllers()
+            guard let controller = document.windowControllers.first as? DocumentWindowController else {
+                fail("live-reload document has no window controller")
+            }
+            controller.showWindow(nil)
+
+            let rendered = await waitUntil(timeout: 25) {
+                let state = controller.debugState()
+                return (state["outlineHeadingCount"] as? Int ?? 0) > 0
+                    && (state["renderCount"] as? Int ?? 0) > 0
+            }
+            guard rendered else { fail("live-reload document did not render in time") }
+            await delay(0.5)
+
+            controller.applyZoomForTesting(1.25)
+            await delay(0.4)
+            _ = await controller.evaluateForTesting("window.scrollTo(0, 900);")
+            await delay(0.5)
+
+            let initial = await liveReloadState(controller, marker: initialMarker)
+            guard numberValue(initial["scrollY"]) > 0 else {
+                fail("live-reload fixture is not scrollable: \(initial)")
+            }
+            let initialRenderCount = initial["renderCount"] as? Int ?? 0
+            let keyWindowBefore = NSApp.keyWindow?.windowNumber ?? -1
+
+            // ---- In-place write -------------------------------------------------
+            do {
+                try writeInPlace(fileURL, text: liveReloadMarkdown(marker: inPlaceMarker))
+            } catch {
+                fail("in-place write failed: \(error.localizedDescription)")
+            }
+            let inPlaceUpdated = await waitForLiveReload(controller,
+                                                         marker: inPlaceMarker,
+                                                         previousRenderCount: initialRenderCount)
+            var inPlace = await liveReloadState(controller, marker: inPlaceMarker)
+            inPlace["updated"] = inPlaceUpdated
+            inPlace["renderCountBefore"] = initialRenderCount
+            inPlace["renderCountIncreased"] =
+                (inPlace["renderCount"] as? Int ?? 0) > initialRenderCount
+            inPlace["scrollBefore"] = initial["scrollY"] ?? 0
+            let inPlaceScrollBefore = numberValue(initial["scrollY"])
+            let inPlaceScrollAfter = numberValue(inPlace["scrollY"])
+            inPlace["scrollPreserved"] = inPlaceScrollBefore > 0
+                && abs(inPlaceScrollAfter - inPlaceScrollBefore) <= 6
+            inPlace["zoomPreserved"] = abs(numberValue(inPlace["pageZoom"]) - 1.25) < 0.01
+
+            let afterInPlaceRenderCount = inPlace["renderCount"] as? Int ?? 0
+
+            // ---- Atomic save: sibling file, then rename over the document ------
+            do {
+                try atomicReplace(fileURL, text: liveReloadMarkdown(marker: atomicMarker))
+            } catch {
+                fail("atomic replace failed: \(error.localizedDescription)")
+            }
+            let atomicUpdated = await waitForLiveReload(controller,
+                                                        marker: atomicMarker,
+                                                        previousRenderCount: afterInPlaceRenderCount)
+            var atomic = await liveReloadState(controller, marker: atomicMarker)
+            atomic["updated"] = atomicUpdated
+            atomic["renderCountBefore"] = afterInPlaceRenderCount
+            atomic["renderCountIncreased"] =
+                (atomic["renderCount"] as? Int ?? 0) > afterInPlaceRenderCount
+            atomic["scrollBefore"] = inPlace["scrollY"] ?? 0
+            let atomicScrollBefore = numberValue(inPlace["scrollY"])
+            let atomicScrollAfter = numberValue(atomic["scrollY"])
+            atomic["scrollPreserved"] = atomicScrollBefore > 0
+                && abs(atomicScrollAfter - atomicScrollBefore) <= 6
+            atomic["zoomPreserved"] = abs(numberValue(atomic["pageZoom"]) - 1.25) < 0.01
+
+            let afterAtomicRenderCount = atomic["renderCount"] as? Int ?? 0
+
+            // ---- mtime-only change: identical bytes must not re-render ---------
+            do {
+                try FileManager.default.setAttributes(
+                    [.modificationDate: Date().addingTimeInterval(30)],
+                    ofItemAtPath: fileURL.path
+                )
+            } catch {
+                fail("mtime update failed: \(error.localizedDescription)")
+            }
+            await delay(1.3)
+            var mtimeOnly = await liveReloadState(controller, marker: atomicMarker)
+            mtimeOnly["renderCountBefore"] = afterAtomicRenderCount
+            mtimeOnly["unchanged"] =
+                (mtimeOnly["renderCount"] as? Int ?? 0) == afterAtomicRenderCount
+            mtimeOnly["markerStillAtomic"] = mtimeOnly["markerFound"] ?? false
+
+            // ---- Deletion keeps the last display -------------------------------
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+            } catch {
+                fail("delete failed: \(error.localizedDescription)")
+            }
+            await delay(1.0)
+            var deleted = await liveReloadState(controller, marker: atomicMarker)
+            deleted["renderCountBefore"] = afterAtomicRenderCount
+            deleted["keptLastContent"] = deleted["markerFound"] ?? false
+            deleted["renderCountUnchanged"] =
+                (deleted["renderCount"] as? Int ?? 0) == afterAtomicRenderCount
+
+            // ---- Recreation at the same path reloads ---------------------------
+            do {
+                try Data(liveReloadMarkdown(marker: recreatedMarker).utf8).write(to: fileURL)
+            } catch {
+                fail("recreate failed: \(error.localizedDescription)")
+            }
+            let recreatedUpdated = await waitForLiveReload(controller,
+                                                           marker: recreatedMarker,
+                                                           previousRenderCount: afterAtomicRenderCount)
+            var recreated = await liveReloadState(controller, marker: recreatedMarker)
+            recreated["updated"] = recreatedUpdated
+            recreated["renderCountIncreased"] =
+                (recreated["renderCount"] as? Int ?? 0) > afterAtomicRenderCount
+
+            // Live reload must not activate the app or change the key window.
+            let keyWindowAfter = NSApp.keyWindow?.windowNumber ?? -1
+            let focus: [String: Any] = [
+                "keyWindowBefore": keyWindowBefore,
+                "keyWindowAfter": keyWindowAfter,
+                "preserved": keyWindowBefore == keyWindowAfter,
+                "appActive": NSApp.isActive,
+            ]
+
+            let result: [String: Any] = [
+                "mode": "live-reload",
+                "file": fileURL.path,
+                "initial": initial,
+                "inPlace": inPlace,
+                "atomic": atomic,
+                "mtimeOnly": mtimeOnly,
+                "deleted": deleted,
+                "recreated": recreated,
+                "focus": focus,
+                "logs": controller.webViewLogs,
+            ]
+            write(result: result, to: jsonPath, label: "QDOWNTEST")
+            document.stopWatchingFile()
+            exit(0)
+        }
+    }
+
+    private static func liveReloadMarkdown(marker: String) -> String {
+        var lines: [String] = [
+            "# Live Reload \(marker)",
+            "",
+            "LIVE-MARKER: \(marker)",
+            "",
+        ]
+        for index in 0..<40 {
+            lines.append("## Section \(index)")
+            lines.append("")
+            lines.append("Paragraph \(index) for \(marker). "
+                         + "The page is intentionally tall so scroll restoration is measurable.")
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @MainActor
+    private static func liveReloadState(_ controller: DocumentWindowController,
+                                        marker: String) async -> [String: Any] {
+        let state = controller.debugState()
+        let text = await controller.evaluateForTesting(
+            "document.getElementById('content').textContent") as? String ?? ""
+        let scrollY = numberValue(await controller.evaluateForTesting("window.scrollY"))
+        return [
+            "marker": marker,
+            "markerFound": text.contains(marker),
+            "bodyLength": text.count,
+            "scrollY": scrollY,
+            "pageZoom": state["pageZoom"] ?? 0,
+            "renderCount": state["renderCount"] ?? 0,
+            "liveReloadCount": state["liveReloadCount"] ?? 0,
+            "headingCount": state["outlineHeadingCount"] ?? 0,
+        ]
+    }
+
+    @MainActor
+    private static func waitForLiveReload(_ controller: DocumentWindowController,
+                                          marker: String,
+                                          previousRenderCount: Int,
+                                          timeout: Double = 15) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let renderCount = controller.debugState()["renderCount"] as? Int ?? 0
+            let text = await controller.evaluateForTesting(
+                "document.getElementById('content').textContent") as? String ?? ""
+            if renderCount > previousRenderCount, text.contains(marker) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return false
+    }
+
+    /// Rewrites the file in place (no rename), which keeps the same inode and
+    /// is therefore caught by the file-descriptor watcher.
+    private static func writeInPlace(_ url: URL, text: String) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data(text.utf8))
+        try handle.synchronize()
+    }
+
+    /// Writes a sibling file and `rename(2)`s it over the document, the way
+    /// editors that save atomically do. `rename` replaces the directory entry
+    /// without ever exposing a partial destination file.
+    private static func atomicReplace(_ url: URL, text: String) throws {
+        let temporary = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).qdown-\(UUID().uuidString)")
+        try Data(text.utf8).write(to: temporary)
+        let status = temporary.path.withCString { source in
+            url.path.withCString { destination in
+                rename(source, destination)
+            }
+        }
+        if status != 0 {
+            let code = errno
+            try? FileManager.default.removeItem(at: temporary)
+            throw NSError(domain: "QdownLiveReload",
+                          code: Int(code),
+                          userInfo: [NSLocalizedDescriptionKey: String(cString: strerror(code))])
         }
     }
 

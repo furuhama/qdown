@@ -39,6 +39,7 @@ rm -f "$OUT"/render.json "$OUT"/render-fallback.json "$OUT"/security.json \
       "$OUT"/smoke-zoom.stdout "$OUT"/smoke-zoom.stderr \
       "$OUT"/smoke-link.stdout "$OUT"/smoke-link.stderr \
       "$OUT"/smoke-tabs.stdout "$OUT"/smoke-tabs.stderr "$OUT"/tabs.json \
+      "$OUT"/live-reload.json "$OUT"/live-reload.stdout "$OUT"/live-reload.stderr \
       "$OUT"/tabs-screen.json "$OUT"/tabs-screen.stdout "$OUT"/tabs-screen.stderr \
       "$OUT"/smoke-live-tabs.stdout "$OUT"/smoke-live-tabs.stderr "$OUT"/live-tabs.json \
       "$OUT"/01-top.png "$OUT"/02-mermaid.png "$OUT"/03-section.png \
@@ -122,6 +123,15 @@ run_qdown smoke-link \
   QDOWNTEST_MODE=smoke \
   QDOWNTEST_FILES=test.md \
   QDOWNTEST_LINK=1
+
+# Live reload: in-place writes, atomic rename saves, mtime-only changes,
+# deletion/recreation, and scroll/zoom preservation. The fixture lives under
+# build/test-output so the repository's tracked Markdown files are untouched.
+rm -rf "$OUT/live-reload"
+run_qdown live-reload \
+  QDOWNTEST_MODE=live-reload \
+  QDOWNTEST_LIVE_FILE=build/test-output/live-reload/fixture.md \
+  QDOWNTEST_JSON=build/test-output/live-reload.json
 
 run_qdown smoke-tabs \
   QDOWNTEST_MODE=tabs \

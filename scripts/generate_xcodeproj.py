@@ -62,6 +62,7 @@ sources = [
     "ZoomStore.swift",
     "RenderTestRunner.swift",
     "DocumentOpenCoordinator.swift",
+    "DocumentFileWatcher.swift",
 ]
 
 source_refs = {}

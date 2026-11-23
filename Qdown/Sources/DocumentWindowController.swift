@@ -19,6 +19,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// floating outline.
     private(set) var headingCount = 0
 
+    /// Counts completed renders (initial plus live reloads). Diagnostics use
+    /// this to prove that a disk change actually re-rendered the page.
+    private(set) var renderCount = 0
+    private var liveReloadInFlight = false
+
     init(document: Document) {
         self.qdownDocument = document
         let directory = qdownDocument.fileURL?.deletingLastPathComponent()
@@ -83,7 +88,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
 
         webView.onRenderDone = { [weak self] _ in
-            self?.contentPane.refreshFindIfNeeded()
+            guard let self else { return }
+            self.renderCount += 1
+            if self.liveReloadInFlight {
+                // Search state does not survive a live reload. Clear it without
+                // moving focus; re-running find would also scroll away from the
+                // restored reading position.
+                self.liveReloadInFlight = false
+                self.contentPane.resetFindForReload()
+            } else {
+                self.contentPane.refreshFindIfNeeded()
+            }
         }
 
         webView.applyPageZoom(zoomStore.zoom)
@@ -222,6 +237,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         return true
     }
 
+    // MARK: - Live reload
+
+    /// Re-renders the document after its file changed on disk. The WebView
+    /// keeps its page zoom, and the page itself saves/restores the scroll
+    /// position around the DOM replacement. No window is activated or made
+    /// key, so background tabs update without taking focus.
+    func applyLiveReload() {
+        guard let baseDirectory = qdownDocument.fileURL?.deletingLastPathComponent() else {
+            return
+        }
+        liveReloadInFlight = true
+        webView.render(markdown: qdownDocument.markdown, baseDirectory: baseDirectory)
+    }
+
     // MARK: - Debug / smoke test
 
     func findForTesting(_ query: String) {
@@ -287,6 +316,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             "findQuery": contentPane.findBar.searchField.stringValue,
             "findCountText": contentPane.findBar.debugCountText,
             "viewerReady": webView.isViewerReady,
+            "renderCount": renderCount,
+            "liveReloadCount": qdownDocument.liveReloadCount,
+            "liveReloadInFlight": liveReloadInFlight,
             "windowCount": NSApp.windows.filter { $0.isVisible }.count,
             "tabCount": window?.tabGroup?.windows.count ?? 1,
             "tabTitles": window?.tabGroup?.windows.map { $0.title } ?? (window.map { [$0.title] } ?? []),
@@ -333,5 +365,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         webView.clearFind()
+        qdownDocument.stopWatchingFile()
     }
 }
