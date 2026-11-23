@@ -131,15 +131,16 @@ body {
  * The outline lives outside #content, so find and select-all never see it. It
  * is position:fixed and counter-scaled by --qdown-inv (= 1 / pageZoom) because
  * WKWebView.pageZoom scales the whole page, including fixed elements. Its
- * right edge tracks the right edge of the text column so it stays next to the
- * document at every zoom level.
+ * right edge hugs the window's right edge with a small constant on-screen
+ * margin; viewer.js divides that margin by pageZoom and narrows it just enough
+ * in tight windows to keep the bars clear of the text column.
  * ------------------------------------------------------------------------- */
 #qdown-outline {
   --qdown-outline-bar: #C4B7D7;
   --qdown-outline-bar-active: #705697;
   position: fixed;
   top: 0;
-  right: max(8px, calc((100vw - 49em) / 2));
+  right: 12px;
   width: 24px;
   height: 100vh;
   z-index: 50;
@@ -176,7 +177,9 @@ body {
 .qdown-outline-bar {
   position: relative;
   display: block;
-  width: 24px;
+  /* Only as wide as the widest visible bar (the active state), so the
+     transparent hit box never covers document text in tight windows. */
+  width: 16px;
   height: 9px;
   margin: 0;
   padding: 0;
@@ -221,7 +224,7 @@ body {
 }
 
 #qdown-outline.qdown-outline-compact .qdown-outline-bar {
-  width: 18px;
+  width: 8px;
   height: 8px;
 }
 
@@ -241,9 +244,10 @@ body {
 }
 
 /* The expanded list is an overlay: it never reflows the document. Its right
- * edge sits 26px from the outline's right edge, overlapping the invisible
- * 44pt hover strip (viewer.js) by 18pt so there is no dead zone between the
- * bars and the panel. */
+ * edge sits 26px from the outline's right edge (38pt from the window edge at
+ * the default 12pt margin), still overlapping the invisible 44pt window-edge
+ * hover strip (viewer.js) so there is no dead zone between the bars and the
+ * panel. */
 .qdown-outline-panel {
   position: absolute;
   top: 50%;

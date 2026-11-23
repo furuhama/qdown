@@ -262,6 +262,20 @@ enum RenderTestRunner {
         let outlineHoverClosed = await evaluate(webView,
             "document.getElementById('qdown-outline').classList.contains('qdown-outline-open')")
             as? Bool ?? true
+        // The new placement leaves a strip between the bars and the window
+        // edge; hovering that strip must open the panel too.
+        let outlineHoverEdge = await evaluate(webView, """
+            (function(){
+              var o=document.getElementById('qdown-outline');
+              var b=o.querySelector('.qdown-outline-bar');
+              if(!b){return false;}
+              var r=b.getBoundingClientRect();
+              window.dispatchEvent(new MouseEvent('mousemove',
+                {bubbles:true,clientX:window.innerWidth-2,clientY:r.top+r.height/2}));
+              return o.classList.contains('qdown-outline-open');
+            })()
+            """) as? Bool ?? false
+        _ = await evaluate(webView, "window.qdown.setOutlineExpanded(false);")
         let outlineHover: [String: Any] = [
             "available": outlineHoverEnter["available"] ?? false,
             "opened": outlineHoverEnter["expanded"] ?? false,
@@ -270,6 +284,7 @@ enum RenderTestRunner {
             "reentryOpened": outlineHoverReentry,
             "openAfterReentry": outlineHoverAfterReentry,
             "closedAfterDelay": outlineHoverClosed,
+            "edgeOpened": outlineHoverEdge,
         ]
 
         let narrowStats = await resize(window: window, webView: webView, width: 520)

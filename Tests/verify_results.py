@@ -121,11 +121,22 @@ def main():
           "render.initial.outlineLevelWidths", str(bar_widths[:8]))
     check(len(set(initial_outline.get("levels", []))) >= 4,
           "render.initial.outlineLevels", str(initial_outline.get("levels")))
-    check(abs(initial_outline.get("outlineRight", 0)
-              - initial_outline.get("bodyRight", 0)) <= 2.0,
-          "render.initial.outlineAtTextRightEdge",
-          f"outlineRight={initial_outline.get('outlineRight')}, "
-          f"bodyRight={initial_outline.get('bodyRight')}")
+    # The bars are anchored to the window's right edge, not the text column.
+    # outlineRightGap is the measured on-screen distance from that edge.
+    check(abs(initial_outline.get("outlineRightGap", 0) - 12.0) <= 1.5,
+          "render.initial.outlineAtWindowRightMargin",
+          f"outlineRightGap={initial_outline.get('outlineRightGap')}, "
+          f"textRightGap={initial_outline.get('textRightGap')}")
+    bar_gaps = initial_outline.get("barRightGaps", [])
+    check(bool(bar_gaps)
+          and all(abs(gap - initial_outline.get("outlineRightGap", 0)) <= 1.0
+                  for gap in bar_gaps),
+          "render.initial.barsAtOutlineRightEdge", str(bar_gaps[:4]))
+    check(initial_outline.get("barClearOfText") is True,
+          "render.initial.barsClearOfText",
+          f"outlineRightGap={initial_outline.get('outlineRightGap')}, "
+          f"barLeftGap={initial_outline.get('barLeftGap')}, "
+          f"textRightGap={initial_outline.get('textRightGap')}")
     check(abs(initial_outline.get("outlineHeight", 0)
               - initial_outline.get("viewportHeight", 0)
               * initial_outline.get("pageZoom", 1)) <= 2.0,
@@ -141,6 +152,14 @@ def main():
     check(initial_outline.get("outlineHitWidth", 0) <= 48.0,
           "render.initial.outlineHitWidthNotTooWide",
           str(initial_outline.get("outlineHitWidth")))
+    check(abs(initial_outline.get("outlineHitRightGap", 0)) <= 1.5,
+          "render.initial.outlineHitReachesWindowEdge",
+          str(initial_outline.get("outlineHitRightGap")))
+    check(initial_outline.get("barsInsideHit") is True,
+          "render.initial.barsInsideHit",
+          f"outlineRightGap={initial_outline.get('outlineRightGap')}, "
+          f"barLeftGap={initial_outline.get('barLeftGap')}, "
+          f"hitLeftGap={initial_outline.get('outlineHitLeftGap')}")
     check(initial_outline.get("panelOverlapsHit") is True,
           "render.initial.outlinePanelOverlapsHit",
           f"panelRight={initial_outline.get('panelRight')}, "
@@ -212,7 +231,8 @@ def main():
     check(render["compact"]["layout"]["contentWidth"] < render["narrow"]["layout"]["contentWidth"],
           "layout.compact narrower than narrow")
 
-    # Narrow windows use the 6-8pt bar variant and stay inside the page.
+    # Narrow windows use the 6-8pt bar variant. The bars still hug the window
+    # edge, and their margin is clamped only as far as needed to clear the text.
     narrow_outline = render["narrow"].get("outline", {})
     check(narrow_outline.get("compact") is True, "outline.narrow.compact",
           str(narrow_outline.get("compact")))
@@ -224,6 +244,30 @@ def main():
           "outline.narrow.hitWidth", str(narrow_outline.get("outlineHitWidth")))
     check(narrow_outline.get("panelOverlapsHit") is True,
           "outline.narrow.panelOverlapsHit")
+    check(narrow_outline.get("barsInsideHit") is True,
+          "outline.narrow.barsInsideHit")
+
+    # Normal widths: bars sit at the 12pt window margin. Narrow/compact windows
+    # use the 6-8pt bars and clamp the margin to 8pt so the bars stay clear of
+    # the text column (the theme's 16pt side padding is the limiting gap).
+    for name, expected_gap in (("narrow", 8.0), ("wide", 12.0)):
+        section_outline = render[name].get("outline", {})
+        gap = section_outline.get("outlineRightGap")
+        check(gap is not None and abs(gap - expected_gap) <= 1.5,
+              f"outline.{name}.windowRightMargin", str(gap))
+        check(section_outline.get("barClearOfText") is True,
+              f"outline.{name}.barsClearOfText",
+              f"outlineRightGap={gap}, "
+              f"textRightGap={section_outline.get('textRightGap')}")
+    compact_outline = render["compact"].get("outline", {})
+    compact_gap = compact_outline.get("outlineRightGap")
+    check(compact_outline.get("compact") is True, "outline.compact.compact")
+    check(compact_gap is not None and abs(compact_gap - 8.0) <= 1.5,
+          "outline.compact.windowRightMargin", str(compact_gap))
+    check(compact_outline.get("barClearOfText") is True,
+          "outline.compact.barsClearOfText",
+          f"outlineRightGap={compact_gap}, "
+          f"textRightGap={compact_outline.get('textRightGap')}")
     check(render["wide"].get("outline", {}).get("compact") is False,
           "outline.wide.notCompact")
 
@@ -280,6 +324,8 @@ def main():
           "outline.hover.reentryCancelsClose", str(hover.get("openAfterReentry")))
     check(hover.get("closedAfterDelay") is False, "outline.hover.closesAfterDelay",
           str(hover.get("closedAfterDelay")))
+    check(hover.get("edgeOpened") is True, "outline.hover.opensAtWindowEdge",
+          str(hover.get("edgeOpened")))
 
     # ---- Floating outline (zoom invariance) --------------------------------
     zooms = render["outlineZooms"]
@@ -287,6 +333,10 @@ def main():
           "outline.zoom.cases", str(sorted(zooms.keys())))
     baseline = zooms.get("1.00", {}).get("outline", {}).get("rectEffectiveBarWidths", [])
     check(bool(baseline), "outline.zoom.baseline")
+    baseline_panel_width = zooms.get("1.00", {}).get(
+        "outline", {}).get("panelEffectiveWidth", 0)
+    check(baseline_panel_width > 0, "outline.zoom.panelBaseline",
+          str(baseline_panel_width))
     for key in ("0.50", "1.00", "1.25", "2.50"):
         entry = zooms.get(key, {})
         outline = entry.get("outline", {})
@@ -297,11 +347,26 @@ def main():
         gaps = outline.get("barRightGaps", [])
         check(bool(gaps) and all(gap > 0 for gap in gaps),
               f"outline.zoom.{key}.barsInsideViewport", str(gaps[:3]))
+        check(abs(outline.get("outlineRightGap", 0) - 12.0) <= 1.5,
+              f"outline.zoom.{key}.windowRightMarginConstant",
+              str(outline.get("outlineRightGap")))
+        check(abs(outline.get("panelEffectiveWidth", 0) - baseline_panel_width) <= 1.0,
+              f"outline.zoom.{key}.panelWidthConstant",
+              str(outline.get("panelEffectiveWidth")))
+        check(abs(outline.get("panelRightGap", 0) - 32.0) <= 1.5,
+              f"outline.zoom.{key}.panelRightGapConstant",
+              str(outline.get("panelRightGap")))
+        check(outline.get("barClearOfText") is True,
+              f"outline.zoom.{key}.barsClearOfText",
+              f"outlineRightGap={outline.get('outlineRightGap')}, "
+              f"textRightGap={outline.get('textRightGap')}")
         check(entry.get("layout", {}).get("overflowX") is False,
               f"outline.zoom.{key}.noOverflow")
         check(abs(outline.get("outlineHitWidth", 0) - 44.0) <= 1.5,
               f"outline.zoom.{key}.hitWidthConstant",
               str(outline.get("outlineHitWidth")))
+        check(outline.get("barsInsideHit") is True,
+              f"outline.zoom.{key}.barsInsideHit")
         check(outline.get("panelOverlapsHit") is True,
               f"outline.zoom.{key}.panelOverlapsHit")
 
@@ -634,11 +699,23 @@ def main():
               str(capture_chrome.get("nativeTabBarVisible")))
         capture_outline = load_outline(capture.get("outline"))
         check_outline_headings(capture_outline, label)
+        capture_gap = capture_outline.get("outlineRightGap")
+        check(capture_gap is not None and abs(capture_gap - 12.0) <= 1.5,
+              f"{label}.outlineAtWindowRightMargin", str(capture_gap))
+        check(capture_outline.get("barClearOfText") is True,
+              f"{label}.barsClearOfText",
+              f"outlineRightGap={capture_gap}, "
+              f"textRightGap={capture_outline.get('textRightGap')}")
+        check(capture_outline.get("barsInsideHit") is True,
+              f"{label}.barsInsideHit")
     check_outline_headings(load_outline(outline_screen.get("outline")),
                            "outlineScreen.expanded")
     screenshot_outline = load_outline(outline_screen.get("outline"))
     check(screenshot_outline.get("expanded") is True, "outlineScreen.panelExpanded")
     check(screenshot_outline.get("panelVisible") is True, "outlineScreen.panelVisible")
+    check(screenshot_outline.get("panelOverlapsHit") is True,
+          "outlineScreen.panelOverlapsHit",
+          f"panelRightGap={screenshot_outline.get('panelRightGap')}")
 
     # ---- Artifacts, CSS, Info.plist ----------------------------------------
     expected_css_hash = "5e33b8e7a578e0b5f93467ff7882c4314d1fcad9d3863ea0656151f0300477b6"

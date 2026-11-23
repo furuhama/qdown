@@ -7,14 +7,18 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
 - **Fixed Quiet Light theme.** Qdown applies `Qdown/Resources/quiet-light.css` as
   its only theme. There is no theme switching and no color re-derivation.
 - **Floating outline.** Every heading from h1 through h6 appears as a short
-  bar along the right edge of the text column, and the bar for the section you
-  are reading is highlighted. Hover the bars to open a hierarchical list;
-  clicking a bar or an entry smooth-scrolls to that heading. The invisible
-  hover target extends about 44pt left of the visible bars, the expanded panel
-  overlaps it so there is no dead zone, and a 400ms grace period lets the
-  pointer travel diagonally into the panel without closing it. The outline is
-  a page overlay: it never reflows the document, is not part of ⌘F results, is
-  excluded from ⌘A, and keeps a constant on-screen size at every zoom level.
+  bar along the right edge of the window, 12pt in from the edge, and the bar
+  for the section you are reading is highlighted. In narrow windows the margin
+  tightens just enough to keep the bars clear of the text column. Hover the
+  bars to open a hierarchical list; clicking a bar or an entry smooth-scrolls
+  to that heading. The invisible hover target is the 44pt strip at the window's
+  right edge, the expanded panel overlaps it so there is no dead zone, and a
+  400ms grace period lets the pointer travel diagonally into the panel without
+  closing it. The outline is a page overlay: it never reflows the document, is
+  not part of ⌘F results, is excluded from ⌘A, and keeps a constant on-screen
+  size at every zoom level. The 12pt window margin is also constant at every
+  zoom level when the text column leaves room for it; narrow windows tighten
+  the margin only as needed to keep the bars clear of the text.
 - **Find in page.** Search with ⌘F, move between matches with ⌘G and ⇧⌘G, and
   close the find bar with Esc.
 - **Persistent zoom.** Zoom the document with ⌘+ and ⌘−, or reset to actual size
@@ -95,7 +99,7 @@ to New Window) to detach it.
 | Zoom in / out | ⌘+ / ⌘− |
 | Actual size | ⌘0 |
 
-Move the pointer to the right edge of the text column to open the outline, then
+Move the pointer to the right edge of the window to open the outline, then
 click a bar or an entry to scroll to that heading. Relative Markdown links open
 in a new tab in the same window, while http(s) links open in your default
 browser.
@@ -128,14 +132,15 @@ runs the following checks:
   following both a programmatic jump and a bar click, the hover/test panel
   expanding without reflow, `#qdown-outline` staying outside `#content`, and ⌘F
   never matching outline text
-- Outline hover intent: the invisible hit strip is ~44pt wide (constant at
-  every page zoom), the panel overlaps the strip, leaving the merged region
-  keeps the panel open for the 400ms grace period, and re-entry cancels the
-  pending close
+- Outline hover intent: the invisible hit strip is ~44pt wide at the window's
+  right edge (constant at every page zoom) and contains the bars, the panel
+  overlaps the strip, leaving the merged region keeps the panel open for the
+  400ms grace period, and re-entry cancels the pending close
 - Outline zoom invariance at page zoom 0.5 / 1.0 / 1.25 / 2.5: the effective
-  bar width stays constant, the bars stay inside the text column's right
-  margin, and the page never overflows horizontally
-- Narrow-window outline: the 6–8pt bar variant at 520px/380px
+  bar width and the 12pt window-right margin stay constant, the bars stay clear
+  of the text column, and the page never overflows horizontally
+- Narrow-window outline: the 6–8pt bar variant at 520px/380px, with the window
+  margin clamped only as far as needed to keep the bars off the text
 - Native window smoke tests: multiple windows, outline heading counts, match
   count, zoom persistence, outline clicks, and relative Markdown links opening
   as tabs in the same window
@@ -176,9 +181,10 @@ headerless-chrome screenshots are `05-headerless-window.png` /
 images are `09-real-tabs-window.png` (native tab bar + outline bars),
 `10-outline-panel.png` (outline panel expanded), and `11-single-window.png`
 (single document, headerless). `Tests/verify_tab_geometry.py` runs on each of
-the three real-screen images and checks the native-tab-bar/full-width geometry,
-the page top, the 28pt single-window strip, and the outline presence against
-the harness JSON.
+the three real-screen images and checks the native-tab-bar/full-width geometry
+and the page top / 28pt single-window strip. The harness JSON from those
+captures also reports the measured outline right-edge gap and verifies that the
+bars sit 12pt from the window edge and stay clear of the text.
 
 ### Verification harness
 

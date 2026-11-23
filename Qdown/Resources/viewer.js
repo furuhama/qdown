@@ -15,13 +15,20 @@
   var outlineBars = outline ? outline.querySelector('.qdown-outline-bars') : null;
   var outlinePanel = outline ? outline.querySelector('.qdown-outline-panel') : null;
 
-  // The bars stay 24pt (18pt compact) wide. The hover target is a wider,
-  // invisible 44pt strip measured from the right edge; it is evaluated in
-  // pointer coordinates instead of being a DOM element so it can overlap the
-  // document text without intercepting selection or link clicks. The panel
-  // overlaps this strip by 18pt, and leaving the merged region closes the
-  // panel only after a short grace period.
+  // The outline column stays 24pt (18pt compact) wide, but each bar button is
+  // only as wide as the widest visual (16pt / 8pt compact) so its transparent
+  // hit box never covers document text. The bars hug the window's right edge
+  // with a small constant on-screen margin. The hover target is the invisible
+  // 44pt strip at that window edge; it is evaluated in pointer coordinates
+  // instead of being a DOM element so it can overlap the document text without
+  // intercepting selection or link clicks. The bars sit inside the strip and
+  // the panel overlaps it, so there is no dead zone between them. Leaving the
+  // merged region closes the panel only after a short grace period.
   var OUTLINE_HIT_WIDTH = 44;
+  var OUTLINE_WINDOW_MARGIN = 12;
+  // Widest visible bar (including the active state) in CSS px / on-screen pt.
+  var OUTLINE_BAR_MAX_WIDTH = 16;
+  var OUTLINE_COMPACT_BAR_MAX_WIDTH = 8;
   var OUTLINE_CLOSE_DELAY = 400;
 
   var errors = [];
@@ -598,17 +605,19 @@
     return !!(outline && outline.classList.contains('qdown-outline-open'));
   }
 
-  /// Invisible hover target: 44 on-screen points from the outline's right
-  /// edge, spanning the bar column vertically. It is expressed in CSS pixels
-  /// (and divided by pageZoom) so the on-screen width stays constant.
+  /// Invisible hover target: the 44pt strip at the window's right edge,
+  /// spanning the bar column vertically. It is expressed in CSS pixels (and
+  /// divided by pageZoom) so the on-screen width stays constant. The bars are
+  /// positioned inside this strip, so hovering either a bar or the window edge
+  /// opens the panel.
   function outlineHitRect() {
     if (!outlineAvailable()) { return null; }
     var zoom = state.pageZoom > 0 ? state.pageZoom : 1;
-    var outlineRect = outline.getBoundingClientRect();
     var barsRect = outlineBars.getBoundingClientRect();
+    var right = window.innerWidth;
     return {
-      left: outlineRect.right - (OUTLINE_HIT_WIDTH / zoom),
-      right: outlineRect.right,
+      left: right - (OUTLINE_HIT_WIDTH / zoom),
+      right: right,
       top: barsRect.top,
       bottom: barsRect.bottom
     };
@@ -734,18 +743,27 @@
     return jumped;
   }
 
-  /// The outline is inside the zoomed page, so undo WKWebView.pageZoom with a
-  /// counter-scale. `right` is a CSS position (physical offset gets multiplied
-  /// by pageZoom, matching the text column's margin); the height is a content
-  /// dimension and must be multiplied by the zoom before the counter-scale.
+  /// The bars hug the window's right edge. `right` is a CSS position inside
+  /// the zoomed page, so the physical window margin is divided by pageZoom
+  /// (the transform: scale(1/zoom) keeps the bars and panel constant-size).
+  /// In narrow windows the margin shrinks as needed so the widest visible bar
+  /// stays clear of the text column; it never reflows the document.
   function syncOutlineGeometry() {
     if (!outlineAvailable()) { return; }
     var zoom = state.pageZoom > 0 ? state.pageZoom : 1;
-    var bodyWidth = document.body ? document.body.getBoundingClientRect().width : window.innerWidth;
-    var gap = Math.max(8, (window.innerWidth - bodyWidth) / 2);
-    outline.style.right = gap + 'px';
+    var compact = (window.innerWidth * zoom) < 720;
+    outline.classList.toggle('qdown-outline-compact', compact);
+    var barWidth = compact ? OUTLINE_COMPACT_BAR_MAX_WIDTH : OUTLINE_BAR_MAX_WIDTH;
+    var contentRect = content.getBoundingClientRect();
+    var textGap = Math.max(0, window.innerWidth - contentRect.right);
+    // `barWidth / zoom` is the bar's width in CSS layout pixels; textGap is
+    // also in CSS layout pixels, so their difference is the largest `right`
+    // that keeps the bar just clear of the text.
+    var maxRight = textGap - (barWidth / zoom);
+    var right = Math.min(OUTLINE_WINDOW_MARGIN / zoom, maxRight);
+    if (!isFinite(right)) { right = OUTLINE_WINDOW_MARGIN / zoom; }
+    outline.style.right = Math.max(0, right) + 'px';
     outline.style.height = (window.innerHeight * zoom) + 'px';
-    outline.classList.toggle('qdown-outline-compact', (window.innerWidth * zoom) < 720);
   }
 
   function measureOutline() {
@@ -843,25 +861,39 @@
     var rectEffectiveWidths = [];
     var levels = [];
     var rightGaps = [];
+    var leftGaps = [];
     var asideRect = available ? outline.getBoundingClientRect() : null;
     var asideGap = asideRect ? (window.innerWidth - asideRect.right) * zoom : 0;
     if (available) {
       Array.prototype.forEach.call(outlineBars.children, function (bar, index) {
         var visual = bar.querySelector('.qdown-outline-bar-visual') || bar;
         // The bounding rect already includes the counter-scale; multiplying by
-        // the page zoom gives the actual on-screen width in points.
+        // the page zoom gives the actual on-screen position/width in points.
+        var rect = visual.getBoundingClientRect();
         var width = parseFloat(getComputedStyle(visual).width) || 0;
-        var rectWidth = visual.getBoundingClientRect().width;
         widths.push(width);
         effectiveWidths.push(width * zoom);
-        rectEffectiveWidths.push(rectWidth * zoom);
+        rectEffectiveWidths.push(rect.width * zoom);
         levels.push(state.headings[index] ? state.headings[index].level : 0);
-        rightGaps.push(asideGap);
+        rightGaps.push((window.innerWidth - rect.right) * zoom);
+        leftGaps.push((window.innerWidth - rect.left) * zoom);
       });
     }
     var panelRect = available ? outlinePanel.getBoundingClientRect() : null;
     var hitRect = available ? outlineHitRect() : null;
     var bodyRect = document.body ? document.body.getBoundingClientRect() : null;
+    var contentRect = content.getBoundingClientRect();
+    // Measured on-screen distances from the window's right edge. `outlineRightGap`
+    // is the distance to the visible bar column, since the bars are right-aligned
+    // inside the outline. `textRightGap` is the distance to the document text.
+    var textRightGap = (window.innerWidth - contentRect.right) * zoom;
+    var barMaxEffectiveWidth = rectEffectiveWidths.length
+      ? Math.max.apply(null, rectEffectiveWidths) : 0;
+    // Measured bar edges, not the outline container's right edge: this catches
+    // a bar column that drifts inside the aside.
+    var barRightGap = rightGaps.length ? Math.min.apply(null, rightGaps) : asideGap;
+    var barLeftGap = leftGaps.length ? Math.max.apply(null, leftGaps) : asideGap;
+    var hitLeftGap = hitRect ? (window.innerWidth - hitRect.left) * zoom : 0;
     var activeHeading = state.outline.activeIndex >= 0
       ? state.headings[state.outline.activeIndex] : null;
     return {
@@ -878,9 +910,15 @@
       panelOpacity: available ? parseFloat(getComputedStyle(outlinePanel).opacity) : 0,
       panelWidth: panelRect ? panelRect.width : 0,
       panelHeight: panelRect ? panelRect.height : 0,
+      panelEffectiveWidth: panelRect ? panelRect.width * zoom : 0,
+      panelEffectiveHeight: panelRect ? panelRect.height * zoom : 0,
       panelRight: panelRect ? panelRect.right : 0,
+      panelRightGap: panelRect ? (window.innerWidth - panelRect.right) * zoom : 0,
       outlineHitWidth: hitRect ? (hitRect.right - hitRect.left) * zoom : 0,
       outlineHitLeft: hitRect ? hitRect.left : 0,
+      outlineHitRight: hitRect ? hitRect.right : 0,
+      outlineHitRightGap: hitRect ? (window.innerWidth - hitRect.right) * zoom : 0,
+      outlineHitLeftGap: hitLeftGap,
       panelOverlapsHit: !!(hitRect && panelRect && panelRect.right >= hitRect.left - 0.5),
       closeDelayMs: OUTLINE_CLOSE_DELAY,
       closePending: state.outline.closeTimer !== null,
@@ -896,13 +934,23 @@
       barWidths: widths,
       effectiveBarWidths: effectiveWidths,
       rectEffectiveBarWidths: rectEffectiveWidths,
+      barMaxEffectiveWidth: barMaxEffectiveWidth,
       barRightGaps: rightGaps,
+      barRightGap: barRightGap,
+      barLeftGap: barLeftGap,
+      outlineRightGap: asideGap,
+      outlineWindowMargin: OUTLINE_WINDOW_MARGIN,
+      textRightGap: textRightGap,
+      barClearOfText: barLeftGap <= textRightGap + 0.5,
+      barsInsideHit: !!hitRect
+        && barRightGap >= -0.5 && barLeftGap <= hitLeftGap + 0.5,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
       bodyWidth: bodyRect ? bodyRect.width : 0,
       bodyRight: bodyRect ? bodyRect.right : 0,
-      outlineRight: available ? outline.getBoundingClientRect().right : 0,
-      outlineHeight: available ? outline.getBoundingClientRect().height * zoom : 0,
+      contentRight: contentRect.right,
+      outlineRight: asideRect ? asideRect.right : 0,
+      outlineHeight: asideRect ? asideRect.height * zoom : 0,
       findRangesInsideOutline: (state.find.ranges || []).filter(function (range) {
         return available && outline.contains(range.startContainer);
       }).length
