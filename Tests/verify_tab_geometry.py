@@ -237,7 +237,7 @@ def main():
         check(chrome.get("contentDragRegionHeight", -1) == 28,
               "realSingle.dragRegionHeight",
               f"{chrome.get('contentDragRegionHeight')}")
-        check(chrome.get("contentDragRegionHandoff") == "performDrag",
+        check(chrome.get("contentDragRegionHandoff") == "screenDelta",
               "realSingle.dragRegionHandoff",
               str(chrome.get("contentDragRegionHandoff")))
 

@@ -480,7 +480,7 @@ def main():
     check(chrome.get("contentDragRegionHeight", -1) == safe_top,
           "chrome.contentDragRegionHeight",
           str(chrome.get("contentDragRegionHeight")))
-    check(chrome.get("contentDragRegionHandoff") == "performDrag",
+    check(chrome.get("contentDragRegionHandoff") == "screenDelta",
           "chrome.contentDragRegionHandoff", str(chrome.get("contentDragRegionHandoff")))
     check(chrome.get("webViewTop", -1) >= safe_top, "chrome.webViewTop",
           str(chrome.get("webViewTop")))
@@ -575,7 +575,7 @@ def main():
     check(tabs_chrome.get("contentDragRegionHeight", -1) == tab_safe_top,
           "tabs.chrome.contentDragRegionHeight",
           str(tabs_chrome.get("contentDragRegionHeight")))
-    check(tabs_chrome.get("contentDragRegionHandoff") == "performDrag",
+    check(tabs_chrome.get("contentDragRegionHandoff") == "screenDelta",
           "tabs.chrome.contentDragRegionHandoff",
           str(tabs_chrome.get("contentDragRegionHandoff")))
     check(tabs_chrome.get("title") in opened.get("titles", []),

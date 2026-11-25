@@ -43,10 +43,12 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
   (the filename stays set as the window/tab title, as before), and only the
   28-point traffic-light strip remains above the page; that strip is a
   draggable window region and the page background reaches the window's top
-  edge. The handle passes the actual mouse-down event to
-  `NSWindow.performDrag(with:)` (AppKit's standard window-server drag), and its
-  hit test runs in the content view's coordinate space, so the grab point stays
-  fixed when the window crosses displays with different backing scales.
+  edge. The handle moves the window itself from the screen-space cursor delta
+  captured at mouse-down instead of handing the drag to `NSWindow.performDrag`;
+  its hit test runs in the content view's coordinate space. Recomputing the
+  origin from the absolute cursor delta keeps the grab point fixed even when
+  the window server pauses frame delivery for a display transition with a
+  different backing scale.
 - **Relative links open in a new tab.** A relative Markdown link opens as a new
   tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
@@ -161,7 +163,7 @@ runs the following checks:
   exposed as a draggable region. The drag-region checks resolve the handle
   through the real content-view hit-test path (not the view's own bounds), at
   the top edge, with the height matching the current safe area, and confirm the
-  `performDrag(with:)` handoff.
+  screen-delta drag handoff (`screenDelta`) rather than `NSWindow.performDrag`.
 - Native tab bar: AppKit's tab bar is visible when a window has 2+ tabs, the
   safe area grows beyond the 28pt single-window strip, the WebView starts below
   it, and the bar spans the whole window

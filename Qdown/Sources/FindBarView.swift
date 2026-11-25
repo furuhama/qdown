@@ -411,20 +411,28 @@ final class ContentViewController: NSViewController {
 }
 
 
-/// The blank strip above the page. It forwards the actual mouse-down event to
-/// `NSWindow.performDrag(with:)`, AppKit's standard window-drag entry point.
+/// The blank strip above the page. It moves the window itself from the
+/// screen-space cursor delta captured at mouse-down.
 ///
-/// Do not use the implicit `mouseDownCanMoveWindow` path here. AppKit builds
-/// and caches the window's draggable region from the view hierarchy; with a
-/// `fullSizeContentView` window that region is assembled again when the window
-/// crosses a display with a different backing scale, and the cached grab point
-/// can stop matching the cursor. `performDrag` hands the drag to the window
-/// server with this event's screen location, so the offset captured at
-/// mouse-down stays valid for the whole drag.
+/// Do not hand the drag to `NSWindow.performDrag(with:)`. On macOS 15 that path
+/// is run by the window server: when the window first straddles two displays
+/// with different backing scales, frame delivery pauses while the window server
+/// switches the window between displays. The cursor keeps moving during the
+/// pause, and the grab point is rebased when delivery resumes, so the window
+/// permanently loses the distance the cursor travelled during the pause
+/// (reproduced: 29pt at a 2x -> 1x boundary, with no application callback in
+/// between). The size of the apparent step therefore depends on how long the
+/// transition takes, not on any Qdown geometry.
+///
+/// Recomputing the origin from the absolute `NSEvent.mouseLocation` delta on
+/// every drag event makes a paused or coalesced update harmless: the next
+/// event catches the window up to the cursor, so the grab offset never
+/// changes. `NSEvent.mouseLocation` is in screen points, independent of the
+/// backing scale of the display the cursor is on.
 final class WindowDragView: NSView {
 
     /// Diagnostic label used by the verification harness.
-    static let dragHandoff = "performDrag"
+    static let dragHandoff = "screenDelta"
 
     /// A drag handle must not also opt into AppKit's implicit background drag.
     override var mouseDownCanMoveWindow: Bool { false }
@@ -433,7 +441,29 @@ final class WindowDragView: NSView {
     /// not key yet; the drag itself also activates the window.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    private var dragStartMouse: NSPoint?
+    private var dragStartOrigin: NSPoint?
+
     override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
+        guard let window else { return }
+        dragStartMouse = NSEvent.mouseLocation
+        dragStartOrigin = window.frame.origin
+        // A click on a titlebar-like strip activates and keys the window even
+        // though the strip, not the titlebar, handles the drag.
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window,
+              let startMouse = dragStartMouse,
+              let startOrigin = dragStartOrigin else { return }
+        let mouse = NSEvent.mouseLocation
+        window.setFrameOrigin(NSPoint(x: startOrigin.x + mouse.x - startMouse.x,
+                                      y: startOrigin.y + mouse.y - startMouse.y))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragStartMouse = nil
+        dragStartOrigin = nil
     }
 }
