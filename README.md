@@ -59,6 +59,9 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
   tab in the same window; http(s) links open in the default browser.
 - **Bundled dependencies.** marked, highlight.js, and Mermaid are vendored into
   the app, so rendering requires no network access.
+- **Application icon.** A light Quiet Light tile with a purple Q whose tail is a
+  downward arrow, generated procedurally at every required size and embedded in
+  the app bundle as `AppIcon.icns`.
 - **Themed Mermaid diagrams.** Mermaid diagrams are rendered with the Quiet
   Light palette.
 
@@ -72,6 +75,16 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
 
 ```sh
 ./scripts/build.sh
+```
+
+The build regenerates `Qdown/Resources/AppIcon.icns` with
+`scripts/generate_icon.swift` (CoreGraphics) before invoking `xcodebuild`.
+To regenerate the icon and its preview by hand:
+
+```sh
+swift scripts/generate_icon.swift \
+  --output Qdown/Resources/AppIcon.icns \
+  --preview /tmp/qdown-icon.png
 ```
 
 The build output is:

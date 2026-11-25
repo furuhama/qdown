@@ -7,6 +7,7 @@ outline (method A), AppKit's native window tabs, and the headerless window.
 import hashlib
 import json
 import plistlib
+import struct
 import sys
 from pathlib import Path
 
@@ -836,6 +837,42 @@ def main():
     check(source_css == built_css, "css.source==built")
 
     info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
+    check(info.get("CFBundleIconFile") in ("AppIcon", "AppIcon.icns"),
+          "icon.infoPlistReference", str(info.get("CFBundleIconFile")))
+    source_icon = (root / "Qdown" / "Resources" / "AppIcon.icns").read_bytes()
+    built_icon_path = app / "Contents" / "Resources" / "AppIcon.icns"
+    built_icon = built_icon_path.read_bytes() if built_icon_path.is_file() else b""
+    check(built_icon[:4] == b"icns", "icon.icnsMagic", built_icon[:4].hex())
+    check(len(built_icon) > 100_000, "icon.icnsSize", str(len(built_icon)))
+    check(source_icon == built_icon, "icon.source==built")
+
+    def png_size(path):
+        data = path.read_bytes()
+        if data[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        return struct.unpack(">II", data[16:24])
+
+    iconset = out / "AppIcon.iconset"
+    required_icons = {
+        "icon_16x16.png": (16, 16),
+        "icon_16x16@2x.png": (32, 32),
+        "icon_32x32.png": (32, 32),
+        "icon_32x32@2x.png": (64, 64),
+        "icon_128x128.png": (128, 128),
+        "icon_128x128@2x.png": (256, 256),
+        "icon_256x256.png": (256, 256),
+        "icon_256x256@2x.png": (512, 512),
+        "icon_512x512.png": (512, 512),
+        "icon_512x512@2x.png": (1024, 1024),
+    }
+    for name, dimensions in required_icons.items():
+        path = iconset / name
+        check(path.is_file() and path.stat().st_size > 100,
+              f"icon.iconset.{name}.exists")
+        check(path.is_file() and png_size(path) == dimensions,
+              f"icon.iconset.{name}.dimensions",
+              str(png_size(path) if path.is_file() else None))
+
     doc_types = info.get("CFBundleDocumentTypes", [])
     extensions = {ext for entry in doc_types for ext in entry.get("CFBundleTypeExtensions", [])}
     check({"md", "markdown", "txt"} <= extensions, "info.extensions", str(extensions))

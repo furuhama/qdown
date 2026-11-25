@@ -367,6 +367,11 @@ python3 "$ROOT/Tests/verify_tab_geometry.py" "$OUT/09-real-tabs-window.png" "$OU
 python3 "$ROOT/Tests/verify_tab_geometry.py" "$OUT/10-outline-panel.png" "$OUT/outline-screen.json"
 python3 "$ROOT/Tests/verify_tab_geometry.py" "$OUT/11-single-window.png" "$OUT/single-screen.json"
 
+echo "==> App icon"
+rm -rf "$OUT/AppIcon.iconset"
+/usr/bin/iconutil -c iconset "$APP/Contents/Resources/AppIcon.icns" -o "$OUT/AppIcon.iconset"
+/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist"
+
 echo "==> Checking results"
 python3 "$ROOT/Tests/verify_results.py" "$OUT"
 

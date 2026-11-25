@@ -7,6 +7,10 @@ cd "$ROOT"
 APP="$ROOT/build/Release/Qdown.app"
 DERIVED="$ROOT/build/DerivedData"
 
+echo "==> Generating app icon"
+swift "$ROOT/scripts/generate_icon.swift" \
+  --output "$ROOT/Qdown/Resources/AppIcon.icns"
+
 echo "==> Building Qdown (arm64 + x86_64)"
 xcodebuild \
   -project Qdown.xcodeproj \

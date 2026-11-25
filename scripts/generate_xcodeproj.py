@@ -79,8 +79,9 @@ html_ref = file_ref("viewer.html", "viewer.html", "text.html")
 viewer_css_ref = file_ref("viewer.css", "viewer.css", "text.css")
 viewer_js_ref = file_ref("viewer.js", "viewer.js", "sourcecode.javascript")
 vendor_ref = folder_ref("vendor", "vendor")
+icon_ref = file_ref("AppIcon.icns", "AppIcon.icns", "image.icns")
 
-resource_refs = [css_ref, html_ref, viewer_css_ref, viewer_js_ref, vendor_ref]
+resource_refs = [css_ref, html_ref, viewer_css_ref, viewer_js_ref, icon_ref, vendor_ref]
 resource_build = [build_file(r, "resource") for r in resource_refs]
 
 test_md_ref = file_ref("test.md", "test.md", "net.daringfireball.markdown")
