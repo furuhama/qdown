@@ -23,6 +23,12 @@ A document-based macOS Markdown viewer written in Swift and AppKit that renders 
   close the find bar with Esc.
 - **Persistent zoom.** Zoom the document with ⌘+ and ⌘−, or reset to actual size
   with ⌘0. The zoom level is stored in `UserDefaults`.
+- **Tab session restore.** The open tabs (paths, order, and the active tab) are
+  saved whenever a tab is opened, closed, reordered, or selected, and again when
+  Qdown quits. The next launch reopens them in order. Tabs whose files no longer
+  exist are skipped, duplicate tabs are preserved, an empty session starts
+  empty, and opening files from Finder or the command line takes precedence
+  over the old session.
 - **Live reload.** Qdown watches the open document's path and its parent
   directory. When another editor writes the file, the page reloads after a
   short debounce. Atomic saves (write a sibling, then `rename` over the

@@ -26,6 +26,12 @@ enum DocumentOpenCoordinator {
     /// never reaches the app delegate's open callbacks.
     static var automaticallyTabsNewDocuments = true
 
+    /// Session restoration attaches every new window explicitly so the saved
+    /// tab order is reproduced exactly. While this is true, the implicit
+    /// "join the key window" hook in `Document.makeWindowControllers` and
+    /// `DocumentWindowController.showWindow` is skipped.
+    static var suppressesAutomaticTabAttachment = false
+
     /// Opens several files in order. The first one joins `host` (or becomes a
     /// window when there is no host); each following one joins the same window.
     static func open(_ urls: [URL],
@@ -96,10 +102,41 @@ enum DocumentOpenCoordinator {
         }
     }
 
+    /// Opens a second, independent document for a path that is already open.
+    ///
+    /// `NSDocumentController` returns the existing document for a URL that is
+    /// already open, so it cannot produce two tabs for the same file. Session
+    /// restoration does need that (the saved session may contain duplicates),
+    /// so this path constructs a standalone `Document` exactly like the
+    /// verification harness does and attaches its window to the tab group.
+    static func openDuplicate(_ url: URL,
+                              host: NSWindow? = nil,
+                              completion: ((Result<Document, Error>) -> Void)? = nil) {
+        do {
+            let data = try Data(contentsOf: url)
+            let document = Document()
+            document.fileURL = url.standardizedFileURL
+            try document.read(from: data, ofType: "net.daringfireball.markdown")
+            document.makeWindowControllers()
+            guard let window = document.windowControllers.first?.window else {
+                completion?(.failure(DocumentOpenError.notAQdownDocument))
+                return
+            }
+            if let target = host ?? preferredHostWindow(excluding: window) {
+                attach(window, to: target)
+            } else {
+                window.makeKeyAndOrderFront(nil)
+            }
+            completion?(.success(document))
+        } catch {
+            completion?(.failure(error))
+        }
+    }
+
     /// Called when a document window is created or shown. If another Qdown
     /// window already exists, the new one joins its native tab group.
     static func attachToExistingWindow(_ window: NSWindow) {
-        guard automaticallyTabsNewDocuments else { return }
+        guard automaticallyTabsNewDocuments, !suppressesAutomaticTabAttachment else { return }
         // Already part of a visible tab group.
         if let tabbed = window.tabbedWindows, tabbed.count > 1 { return }
         guard let host = preferredHostWindow(excluding: window), host !== window else { return }

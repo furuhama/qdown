@@ -7,13 +7,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private weak var recentMenu: NSMenu?
     private var renderTestStarted = false
     private var isShowingOpenPanel = false
+    /// Set by any LaunchServices/Finder open callback during this launch. Such
+    /// a launch opens the requested files instead of restoring the old session.
+    private var launchFileEventCount = 0
 
     // MARK: - Lifecycle
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Install Qdown's document controller before AppKit can create the
+        // default one; it declines window restoration so only SessionStore
+        // decides which documents reopen.
+        _ = QdownDocumentController()
+
         // Native window tabbing is the core of Qdown's multi-document UI.
         NSWindow.allowsAutomaticWindowTabbing = true
         NSApp.mainMenu = buildMainMenu()
+
+        if !RenderTestRunner.isTestMode || RenderTestRunner.runsSessionTests {
+            SessionRecorder.shared.start()
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -29,19 +41,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // LaunchServices delivers an open event.
         _ = NSDocumentController.shared
 
-        // A plain launch has no document. Wait briefly for a possible open event
-        // (double-click / "Open With"), then offer the open panel.
+        // A plain launch either restores the previous tab session or, when
+        // there is nothing to restore, waits briefly for a possible open event
+        // (double-click / "Open With") and then offers the open panel.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
             guard let self else { return }
             guard !RenderTestRunner.isTestMode else { return }
-            if NSDocumentController.shared.documents.isEmpty,
-               NSApp.windows.filter({ $0.isVisible }).isEmpty {
-                self.presentOpenPanel(preferredHost: nil)
+            guard NSDocumentController.shared.documents.isEmpty,
+                  NSApp.windows.filter({ $0.isVisible && $0.windowController is DocumentWindowController }).isEmpty
+            else {
+                return
+            }
+
+            let launchFiles = SessionLaunchRestore.commandLineFileArgumentCount
+                + self.launchFileEventCount
+            SessionLaunchRestore.restoreOnLaunch(
+                launchFileCount: launchFiles,
+                existingDocumentCount: NSDocumentController.shared.documents.count
+            ) { outcome in
+                self.writeSessionRestoreReport(outcome)
+                switch outcome {
+                case .noSavedSession, .noExistingFiles:
+                    self.presentOpenPanel(preferredHost: nil)
+                case .restored(let count) where count == 0:
+                    self.presentOpenPanel(preferredHost: nil)
+                default:
+                    break
+                }
             }
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        SessionRecorder.shared.saveBeforeTermination()
+    }
+
+    /// Test hook used by `scripts/verify.sh` to inspect a real production
+    /// launch (one with no QDOWNTEST_MODE) after the saved session is restored.
+    private func writeSessionRestoreReport(_ outcome: SessionRestoreOutcome) {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["QDOWNTEST_SESSION_REPORT"], !path.isEmpty else {
+            return
+        }
+
+        let group = NSApp.windows
+            .compactMap { $0.tabGroup }
+            .max { $0.windows.count < $1.windows.count }
+        let windows = group?.windows ?? []
+        let controllers = windows.compactMap { $0.windowController as? DocumentWindowController }
+        let report: [String: Any] = [
+            "outcome": String(describing: outcome),
+            "titles": windows.map { $0.title },
+            "paths": controllers.compactMap { $0.qdownDocument.fileURL?.standardizedFileURL.path },
+            "activeTitle": group?.selectedWindow?.title ?? "",
+            "tabCount": windows.count,
+            "windowNumber": windows.first?.windowNumber ?? -1,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: report,
+                                                     options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? data.write(to: url)
+    }
+
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    // Qdown restores its own tab session from `SessionStore`. Letting AppKit
+    // replay the previous windows as well would duplicate tabs (and would
+    // reopen files the session restore is supposed to skip).
+    func applicationShouldSaveApplicationState(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldRestoreApplicationState(_ sender: NSApplication) -> Bool {
         false
     }
 
@@ -61,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // opening extra documents. The live-tabs harness deliberately accepts
         // real LaunchServices open events so Finder double-click is covered.
         guard !RenderTestRunner.isTestMode || RenderTestRunner.acceptsOpenEvents else { return }
+        launchFileEventCount += urls.count
         openFromEvent(urls)
     }
 
@@ -72,12 +150,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             sender.reply(toOpenOrPrint: .failure)
             return
         }
+        launchFileEventCount += filenames.count
         openFromEvent(filenames.map { URL(fileURLWithPath: $0) })
         sender.reply(toOpenOrPrint: .success)
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
         guard !RenderTestRunner.isTestMode || RenderTestRunner.acceptsOpenEvents else { return false }
+        launchFileEventCount += 1
         openFromEvent([URL(fileURLWithPath: filename)])
         return true
     }

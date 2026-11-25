@@ -63,6 +63,8 @@ sources = [
     "RenderTestRunner.swift",
     "DocumentOpenCoordinator.swift",
     "DocumentFileWatcher.swift",
+    "SessionStore.swift",
+    "DocumentController.swift",
 ]
 
 source_refs = {}

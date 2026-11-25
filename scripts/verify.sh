@@ -46,7 +46,14 @@ rm -f "$OUT"/render.json "$OUT"/render-fallback.json "$OUT"/security.json \
       "$OUT"/05-headerless-window.png "$OUT"/06-headerless-content.png \
       "$OUT"/07-headerless-tabs-window.png "$OUT"/08-headerless-tabs-content.png \
       "$OUT"/09-real-tabs-window.png "$OUT"/10-outline-panel.png \
-      "$OUT"/11-single-window.png
+      "$OUT"/11-single-window.png \
+      "$OUT"/session-save.json "$OUT"/session-restore.json \
+      "$OUT"/session-arguments.json "$OUT"/production-restore.json \
+      "$OUT"/session-save.stdout "$OUT"/session-save.stderr \
+      "$OUT"/session-restore.stdout "$OUT"/session-restore.stderr \
+      "$OUT"/session-arguments.stdout "$OUT"/session-arguments.stderr \
+      "$OUT"/production-restore.stdout "$OUT"/production-restore.stderr
+rm -rf "$OUT/AppIcon.iconset"
 
 kill_qdown() {
   pkill -x Qdown 2>/dev/null || true
@@ -251,6 +258,73 @@ PY
   fi
   echo "    captured window $window_id -> $(basename "$png")"
 }
+
+# Tab session persistence: one process opens five tabs (one file twice, one
+# temporary tab that is closed before quitting), then terminates normally.
+# A second process restores the session after one file has been deleted.
+echo "==> Tab session persistence"
+SESSION_DIR="$OUT/session"
+rm -rf "$SESSION_DIR"
+mkdir -p "$SESSION_DIR"
+cp test.md "$SESSION_DIR/a.md"
+cp Tests/fixtures/other.md "$SESSION_DIR/b.md"
+cp Tests/fixtures/security.md "$SESSION_DIR/c.md"
+cp test.md "$SESSION_DIR/temp.md"
+/usr/bin/defaults delete com.furuhama.qdown.sessiontest 2>/dev/null || true
+
+SESSION_FILES="$(printf '%s\n' \
+  "$SESSION_DIR/a.md" \
+  "$SESSION_DIR/b.md" \
+  "$SESSION_DIR/a.md" \
+  "$SESSION_DIR/c.md" \
+  "$SESSION_DIR/temp.md")"
+run_qdown session-save \
+  QDOWNTEST_MODE=session-save \
+  QDOWNTEST_SESSION_SUITE=com.furuhama.qdown.sessiontest \
+  QDOWNTEST_SESSION_ACTIVE=2 \
+  QDOWNTEST_FILES="$SESSION_FILES" \
+  QDOWNTEST_JSON=build/test-output/session-save.json
+
+rm -f "$SESSION_DIR/c.md"
+run_qdown session-restore \
+  QDOWNTEST_MODE=session-restore \
+  QDOWNTEST_SESSION_SUITE=com.furuhama.qdown.sessiontest \
+  QDOWNTEST_JSON=build/test-output/session-restore.json
+
+# The same restore through the real production launch path (no QDOWNTEST_MODE):
+# the app delegate reads the saved session after waiting for open events.
+echo "==> production launch restore"
+kill_qdown
+rm -f "$OUT/production-restore.json" "$OUT/production-restore.stdout" "$OUT/production-restore.stderr"
+timeout --signal=TERM --kill-after=5 "$TIMEOUT_SECS" env \
+  QDOWNTEST_SESSION_SUITE=com.furuhama.qdown.sessiontest \
+  QDOWNTEST_SESSION_REPORT="$OUT/production-restore.json" \
+  "$QS" > "$OUT/production-restore.stdout" 2> "$OUT/production-restore.stderr" &
+production_pid=$!
+for _ in $(seq 1 80); do
+  [ -s "$OUT/production-restore.json" ] && break
+  sleep 0.25
+done
+kill_qdown
+wait "$production_pid" 2>/dev/null || true
+if [ ! -s "$OUT/production-restore.json" ]; then
+  echo "error: production launch did not restore the saved session" >&2
+  tail -20 "$OUT/production-restore.stderr" >&2 || true
+  exit 1
+fi
+restored_tabs=$(python3 - "$OUT/production-restore.json" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1]))["tabCount"])
+PY
+)
+echo "    restored ${restored_tabs} tab(s)"
+
+run_qdown session-arguments \
+  QDOWNTEST_MODE=session-arguments \
+  QDOWNTEST_SESSION_SUITE=com.furuhama.qdown.sessiontest \
+  QDOWNTEST_FILES="$SESSION_DIR/a.md" \
+  QDOWNTEST_JSON=build/test-output/session-arguments.json
 
 # Single document with the floating outline panel forced open (test hook).
 capture_window outline-screen "$OUT/10-outline-panel.png" "$OUT/outline-screen.json" \

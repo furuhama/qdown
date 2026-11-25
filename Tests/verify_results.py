@@ -78,6 +78,10 @@ def main():
     live_tabs = json.loads((out / "live-tabs.json").read_text())
     outline_screen = json.loads((out / "outline-screen.json").read_text())
     single_screen = json.loads((out / "single-screen.json").read_text())
+    session_save = json.loads((out / "session-save.json").read_text())
+    session_restore = json.loads((out / "session-restore.json").read_text())
+    session_arguments = json.loads((out / "session-arguments.json").read_text())
+    production_restore = json.loads((out / "production-restore.json").read_text())
 
     # ---- Markdown rendering -------------------------------------------------
     initial = render["initial"]
@@ -716,6 +720,112 @@ def main():
     check(screenshot_outline.get("panelOverlapsHit") is True,
           "outlineScreen.panelOverlapsHit",
           f"panelRightGap={screenshot_outline.get('panelRightGap')}")
+
+    # ---- Tab session restore -------------------------------------------------
+    check(session_save.get("mode") == "session-save", "sessionSave.mode",
+          str(session_save.get("mode")))
+    check(session_save.get("terminatingNormally") is True, "sessionSave.normalQuit")
+    check(session_save.get("requestedActiveIndex") == 2, "sessionSave.requestedActive")
+    expected_open = ["a.md", "b.md", "a.md", "c.md", "temp.md"]
+    check(session_save["afterOpen"]["titles"] == expected_open,
+          "sessionSave.tabOrderAfterOpen", str(session_save["afterOpen"]["titles"]))
+    check([Path(path).name for path in session_save["afterOpen"]["paths"]] == expected_open,
+          "sessionSave.savedPathsAfterOpen",
+          str(session_save["afterOpen"]["paths"]))
+    check(session_save["afterSwitch"]["activeIndex"] == 2,
+          "sessionSave.switchSaved", str(session_save["afterSwitch"]["activeIndex"]))
+    check(session_save["afterSwitch"]["selectedTitle"] == "a.md",
+          "sessionSave.switchTarget", str(session_save["afterSwitch"]["selectedTitle"]))
+    check(session_save["afterClose"]["titles"] == ["a.md", "b.md", "a.md", "c.md"],
+          "sessionSave.closeSaved", str(session_save["afterClose"]["titles"]))
+    check([Path(path).name for path in session_save["afterClose"]["paths"]]
+          == ["a.md", "b.md", "a.md", "c.md"],
+          "sessionSave.closePaths", str(session_save["afterClose"]["paths"]))
+    check(session_save["afterClose"]["activeIndex"] == 2,
+          "sessionSave.activeAfterClose", str(session_save["afterClose"]["activeIndex"]))
+    check(session_save["afterClose"]["selectedTitle"] == "a.md",
+          "sessionSave.selectedAfterClose",
+          str(session_save["afterClose"]["selectedTitle"]))
+    check(session_save["afterSuspendedSwitch"]["activeIndex"] == 2,
+          "sessionSave.suspendedSaveDidNotRun",
+          str(session_save["afterSuspendedSwitch"]["activeIndex"]))
+    check(session_save.get("terminationActiveIndex") == 1,
+          "sessionSave.terminationTarget",
+          str(session_save.get("terminationActiveIndex")))
+
+    check(session_restore.get("mode") == "session-restore", "sessionRestore.mode",
+          str(session_restore.get("mode")))
+    check(session_restore.get("documentsAtLaunch") == 0,
+          "sessionRestore.noAppKitReopen",
+          f"{session_restore.get('documentsAtLaunch')}: "
+          f"{session_restore.get('launchDocumentURLs')}")
+    check([Path(path).name for path in session_restore.get("savedPaths", [])]
+          == ["a.md", "b.md", "a.md", "c.md"],
+          "sessionRestore.savedBeforeDelete", str(session_restore.get("savedPaths")))
+    check(session_restore.get("savedActiveIndex") == 1,
+          "sessionRestore.terminationSaved", str(session_restore.get("savedActiveIndex")))
+    check(session_restore.get("outcome") == "restored(3)",
+          "sessionRestore.outcome", str(session_restore.get("outcome")))
+    check(session_restore.get("tabCount") == 3, "sessionRestore.tabCount",
+          str(session_restore.get("tabCount")))
+    check(session_restore.get("documentWindowCount") == 1,
+          "sessionRestore.singleWindow", str(session_restore.get("documentWindowCount")))
+    check(session_restore.get("renderedTabs") == 3, "sessionRestore.renderedTabs",
+          str(session_restore.get("renderedTabs")))
+    check(session_restore.get("titles") == ["a.md", "b.md", "a.md"],
+          "sessionRestore.order", str(session_restore.get("titles")))
+    check([Path(path).name for path in session_restore.get("restoredPaths", [])]
+          == ["a.md", "b.md", "a.md"],
+          "sessionRestore.duplicatesKept", str(session_restore.get("restoredPaths")))
+    check(session_restore.get("activeIndex") == 1, "sessionRestore.activeIndex",
+          str(session_restore.get("activeIndex")))
+    check(session_restore.get("activeTitle") == "b.md", "sessionRestore.activeTitle",
+          str(session_restore.get("activeTitle")))
+    check([Path(path).name for path in session_restore.get("sessionAfterRestore", [])]
+          == ["a.md", "b.md", "a.md"],
+          "sessionRestore.missingFileDropped",
+          str(session_restore.get("sessionAfterRestore")))
+
+    check(session_arguments.get("mode") == "session-arguments",
+          "sessionArguments.mode", str(session_arguments.get("mode")))
+    check([Path(path).name for path in session_arguments.get("savedPathsBefore", [])]
+          == ["a.md", "b.md", "a.md"],
+          "sessionArguments.oldSessionExists",
+          str(session_arguments.get("savedPathsBefore")))
+    check(session_arguments.get("skipOutcome") == "skippedLaunchArguments",
+          "sessionArguments.fileArgumentWins",
+          str(session_arguments.get("skipOutcome")))
+    check(session_arguments.get("documentsAfterSkip") == 0,
+          "sessionArguments.noRestoreOnArgument",
+          str(session_arguments.get("documentsAfterSkip")))
+    check(session_arguments.get("tabsAfterSkip") == 0,
+          "sessionArguments.noTabsOnArgument",
+          str(session_arguments.get("tabsAfterSkip")))
+    check(session_arguments.get("argumentTitle") == "a.md",
+          "sessionArguments.argumentOpened", str(session_arguments.get("argumentTitle")))
+    check(session_arguments.get("argumentTabCount") == 1,
+          "sessionArguments.singleArgumentTab",
+          str(session_arguments.get("argumentTabCount")))
+    check(session_arguments.get("emptyOutcome") == "noSavedSession",
+          "sessionArguments.emptySession", str(session_arguments.get("emptyOutcome")))
+    check(session_arguments.get("documentsAfterEmpty") == 1,
+          "sessionArguments.emptyOpensNothing",
+          str(session_arguments.get("documentsAfterEmpty")))
+    check(session_arguments.get("tabsAfterEmpty") == 1,
+          "sessionArguments.emptyTabsUnchanged",
+          str(session_arguments.get("tabsAfterEmpty")))
+
+    check(production_restore.get("outcome") == "restored(count: 3)",
+          "productionRestore.outcome", str(production_restore.get("outcome")))
+    check(production_restore.get("tabCount") == 3, "productionRestore.tabCount",
+          str(production_restore.get("tabCount")))
+    check(production_restore.get("titles") == ["a.md", "b.md", "a.md"],
+          "productionRestore.order", str(production_restore.get("titles")))
+    check([Path(path).name for path in production_restore.get("paths", [])]
+          == ["a.md", "b.md", "a.md"],
+          "productionRestore.paths", str(production_restore.get("paths")))
+    check(production_restore.get("activeTitle") == "b.md",
+          "productionRestore.activeTitle", str(production_restore.get("activeTitle")))
 
     # ---- Artifacts, CSS, Info.plist ----------------------------------------
     expected_css_hash = "5e33b8e7a578e0b5f93467ff7882c4314d1fcad9d3863ea0656151f0300477b6"

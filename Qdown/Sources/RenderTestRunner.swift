@@ -27,6 +27,9 @@ enum RenderTestRunner {
         case liveTabs
         case liveReload
         case window
+        case sessionSave
+        case sessionRestore
+        case sessionArguments
     }
 
     private static var mode: TestMode? {
@@ -37,6 +40,9 @@ enum RenderTestRunner {
             if raw == "live-tabs" { return .liveTabs }
             if raw == "live-reload" || raw == "live" { return .liveReload }
             if raw == "window" { return .window }
+            if raw == "session-save" { return .sessionSave }
+            if raw == "session-restore" { return .sessionRestore }
+            if raw == "session-arguments" { return .sessionArguments }
         }
         let arguments = CommandLine.arguments
         if arguments.contains("--smoke-test") { return .smoke }
@@ -55,6 +61,17 @@ enum RenderTestRunner {
     /// it must accept LaunchServices open events while every other harness mode
     /// ignores them.
     static var acceptsOpenEvents: Bool { mode == .liveTabs }
+
+    /// Session harness modes run against the isolated test UserDefaults suite
+    /// and therefore need the production session recorder running.
+    static var runsSessionTests: Bool {
+        switch mode {
+        case .sessionSave, .sessionRestore, .sessionArguments:
+            return true
+        default:
+            return false
+        }
+    }
 
     private static var didStart = false
 
@@ -90,6 +107,12 @@ enum RenderTestRunner {
             runLiveReloadTest(arguments: arguments)
         case .window:
             runWindowTest(arguments: arguments)
+        case .sessionSave:
+            runSessionSaveTest(arguments: arguments)
+        case .sessionRestore:
+            runSessionRestoreTest(arguments: arguments)
+        case .sessionArguments:
+            runSessionArgumentsTest(arguments: arguments)
         case nil:
             return
         }
@@ -1215,6 +1238,355 @@ enum RenderTestRunner {
             }
             exit(0)
         }
+    }
+
+
+    // MARK: - Tab session tests
+
+    /// Opens a controlled set of tabs (duplicates included), switches tabs,
+    /// closes one, and reports what the production recorder persisted. The
+    /// process then terminates normally so the termination save runs too.
+    private static func runSessionSaveTest(arguments: [String]) {
+        let paths = sessionPaths()
+        guard !paths.isEmpty else {
+            fail("usage: QDOWNTEST_MODE=session-save QDOWNTEST_FILES=$'a.md\\nb.md' Qdown")
+        }
+        let activeIndex = Int(ProcessInfo.processInfo.environment["QDOWNTEST_SESSION_ACTIVE"] ?? "") ?? 0
+        let store = SessionStore()
+        store.clear()
+        store.synchronize()
+
+        let urls = paths.map { URL(fileURLWithPath: $0).standardizedFileURL }
+
+        Task { @MainActor in
+            // macOS may replay documents from a previous process at launch.
+            // They are not part of this session and would corrupt the order.
+            await delay(0.8)
+            closeUnexpectedDocuments(keeping: [])
+            await delay(0.4)
+            closeUnexpectedDocuments(keeping: [])
+
+            var documents: [Document] = []
+            var host: NSWindow?
+            var seen = Set<String>()
+            var orderAfterEachOpen: [[String]] = []
+
+            // Open in the saved order with explicit attachment so this test
+            // starts from a known tab order regardless of which window AppKit
+            // would have chosen while the app was becoming active.
+            DocumentOpenCoordinator.suppressesAutomaticTabAttachment = true
+            let previousAutomaticTabbing = NSWindow.allowsAutomaticWindowTabbing
+            NSWindow.allowsAutomaticWindowTabbing = false
+
+            for url in urls {
+                let duplicate = !seen.insert(url.path).inserted
+                let result = await openForSession(url, host: host, duplicate: duplicate)
+                switch result {
+                case .success(let document):
+                    documents.append(document)
+                    host = document.windowControllers.first?.window
+                    await delay(0.3)
+                    orderAfterEachOpen.append(host?.tabGroup?.windows.map { $0.title } ?? [])
+                case .failure(let error):
+                    fail("cannot open \(url.path): \(error.localizedDescription)")
+                }
+            }
+
+            NSWindow.allowsAutomaticWindowTabbing = previousAutomaticTabbing
+            DocumentOpenCoordinator.suppressesAutomaticTabAttachment = false
+
+            guard let hostWindow = host, let group = hostWindow.tabGroup else {
+                fail("no tab group was created")
+            }
+            let rendered = await waitUntil(timeout: 25) {
+                documents.allSatisfy { document in
+                    let controller = document.windowControllers.first as? DocumentWindowController
+                    return (controller?.debugState()["outlineHeadingCount"] as? Int ?? 0) > 0
+                }
+            }
+            guard rendered else { fail("session documents did not render in time") }
+            await delay(1.2)
+
+            store.synchronize()
+            let afterOpen = sessionReport(store.load(), group: group)
+
+            if group.windows.indices.contains(activeIndex) {
+                let target = group.windows[activeIndex]
+                NSApp.activate(ignoringOtherApps: true)
+                await delay(0.6)
+                group.selectedWindow = target
+                target.makeKeyAndOrderFront(nil)
+            }
+            await delay(1.4)
+            store.synchronize()
+            var afterSwitch = sessionReport(store.load(), group: group)
+            afterSwitch["appActive"] = NSApp.isActive
+            afterSwitch["keyTitle"] = NSApp.keyWindow?.title ?? ""
+            let selectedTitle = group.selectedWindow?.title ?? ""
+
+            // Close the trailing tab; the session must shrink and keep the
+            // active tab's index intact.
+            if let trailing = group.windows.last {
+                trailing.close()
+            }
+            await delay(1.4)
+            store.synchronize()
+            let afterClose = sessionReport(store.load(), group: group)
+
+            // Suspend the ordinary save hooks, switch tabs, and quit. Only the
+            // production termination save can persist this change, which the
+            // next process verifies by restoring the new active tab.
+            SessionRecorder.shared.beginRestoring()
+            if group.windows.indices.contains(1) {
+                let target = group.windows[1]
+                group.selectedWindow = target
+                target.makeKeyAndOrderFront(nil)
+            }
+            await delay(0.8)
+            store.synchronize()
+            let afterSuspendedSwitch = sessionReport(store.load(), group: group)
+
+            let result: [String: Any] = [
+                "mode": "session-save",
+                "requestedPaths": urls.map { $0.path },
+                "requestedActiveIndex": activeIndex,
+                "titlesAfterOpen": group.windows.map { $0.title },
+                "orderAfterEachOpen": orderAfterEachOpen,
+                "afterOpen": afterOpen,
+                "afterSwitch": afterSwitch,
+                "selectedTitle": selectedTitle,
+                "afterClose": afterClose,
+                "afterSuspendedSwitch": afterSuspendedSwitch,
+                "terminationActiveIndex": 1,
+                "terminationActiveTitle": "b.md",
+                "terminatingNormally": true,
+            ]
+            write(result: result,
+                  to: setting("QDOWNTEST_JSON", flag: "--session-json", in: arguments),
+                  label: "QDOWNSESSION")
+            // Exercise the production termination save in a real process exit.
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// Restores the session left behind by `session-save` and reports the tab
+    /// order, duplicate handling, missing-file skipping, and active tab.
+    private static func runSessionRestoreTest(arguments: [String]) {
+        let store = SessionStore()
+        guard let saved = store.load() else {
+            fail("no saved session to restore")
+        }
+
+        Task { @MainActor in
+            // Ignore any documents macOS replayed into this fresh process;
+            // only the persisted session is under test here.
+            let documentsAtLaunch = NSDocumentController.shared.documents.count
+            let launchDocumentURLs = NSDocumentController.shared.documents
+                .compactMap { ($0 as? Document)?.fileURL?.lastPathComponent }
+            await delay(0.8)
+            closeUnexpectedDocuments(keeping: [])
+            await delay(0.4)
+            closeUnexpectedDocuments(keeping: [])
+
+            let outcome = await restoreOutcome(saved, store: store)
+            guard case .restored(let restoredCount) = outcome else {
+                fail("restore did not run: \(sessionOutcomeName(outcome))")
+            }
+
+            let group = sessionGroupWindows()
+            let controllers = group.compactMap {
+                ($0.windowController as? DocumentWindowController)
+            }
+            let rendered = await waitUntil(timeout: 25) {
+                controllers.allSatisfy { ($0.debugState()["outlineHeadingCount"] as? Int ?? 0) > 0 }
+            }
+            guard rendered else { fail("restored documents did not render in time") }
+            await delay(1.0)
+            store.synchronize()
+
+            let paths = group.compactMap { window -> String? in
+                (window.windowController as? DocumentWindowController)?
+                    .qdownDocument.fileURL?.standardizedFileURL.path
+            }
+            let activeTitle = group.first {
+                $0.tabGroup?.selectedWindow === $0
+            }?.title ?? ""
+
+            let result: [String: Any] = [
+                "mode": "session-restore",
+                "savedPaths": saved.paths,
+                "savedActiveIndex": saved.activeIndex,
+                "outcome": sessionOutcomeName(outcome),
+                "restoredCount": restoredCount,
+                "restoredPaths": paths,
+                "titles": group.map { $0.title },
+                "tabCount": group.count,
+                "documentWindowCount": documentWindowCount(),
+                "activeTitle": activeTitle,
+                "activeIndex": group.firstIndex { $0.tabGroup?.selectedWindow === $0 } ?? -1,
+                "renderedTabs": controllers.filter {
+                    ($0.debugState()["outlineHeadingCount"] as? Int ?? 0) > 0
+                }.count,
+                "sessionAfterRestore": store.load()?.paths ?? [],
+                "documentsAtLaunch": documentsAtLaunch,
+                "launchDocumentURLs": launchDocumentURLs,
+                "documentControllerClass": String(describing: type(of: NSDocumentController.shared)),
+            ]
+            write(result: result,
+                  to: setting("QDOWNTEST_JSON", flag: "--session-json", in: arguments),
+                  label: "QDOWNSESSION")
+            exit(0)
+        }
+    }
+
+    /// A launch with a file argument must not restore the saved session. The
+    /// empty-session case must also stay empty instead of reopening anything.
+    private static func runSessionArgumentsTest(arguments: [String]) {
+        let paths = sessionPaths()
+        guard let argumentPath = paths.first else {
+            fail("usage: QDOWNTEST_MODE=session-arguments QDOWNTEST_FILES=<file.md> Qdown")
+        }
+        let store = SessionStore()
+        let saved = store.load()
+
+        Task { @MainActor in
+            await delay(0.8)
+            closeUnexpectedDocuments(keeping: [])
+            await delay(0.4)
+            closeUnexpectedDocuments(keeping: [])
+
+            let skipOutcome = await restoreOnLaunchOutcome(launchFileCount: 1,
+                                                           existingDocumentCount: 0,
+                                                           store: store)
+            await delay(0.3)
+            let documentsAfterSkip = NSDocumentController.shared.documents.count
+            let tabsAfterSkip = sessionGroupWindows().count
+
+            let url = URL(fileURLWithPath: argumentPath).standardizedFileURL
+            let opened = await openDocumentForTesting(url, host: nil)
+            guard case .success(let document) = opened,
+                  let window = document.windowControllers.first?.window,
+                  let controller = window.windowController as? DocumentWindowController else {
+                fail("cannot open argument file \(url.path)")
+            }
+            _ = await waitUntil(timeout: 25) {
+                (controller.debugState()["outlineHeadingCount"] as? Int ?? 0) > 0
+            }
+            await delay(0.8)
+            let group = sessionGroupWindows()
+
+            // Empty saved session: no restore, no new documents.
+            store.clear()
+            store.synchronize()
+            let emptyOutcome = await restoreOnLaunchOutcome(launchFileCount: 0,
+                                                            existingDocumentCount: 0,
+                                                            store: store)
+            await delay(0.3)
+
+            let result: [String: Any] = [
+                "mode": "session-arguments",
+                "savedPathsBefore": saved?.paths ?? [],
+                "skipOutcome": sessionOutcomeName(skipOutcome),
+                "documentsAfterSkip": documentsAfterSkip,
+                "tabsAfterSkip": tabsAfterSkip,
+                "argumentTitle": window.title,
+                "argumentTabCount": group.count,
+                "emptyOutcome": sessionOutcomeName(emptyOutcome),
+                "documentsAfterEmpty": NSDocumentController.shared.documents.count,
+                "tabsAfterEmpty": sessionGroupWindows().count,
+            ]
+            write(result: result,
+                  to: setting("QDOWNTEST_JSON", flag: "--session-json", in: arguments),
+                  label: "QDOWNSESSION")
+            exit(0)
+        }
+    }
+
+    private static func sessionPaths() -> [String] {
+        guard let raw = ProcessInfo.processInfo.environment["QDOWNTEST_FILES"], !raw.isEmpty else {
+            return []
+        }
+        return raw.split(separator: "\n").map(String.init)
+    }
+
+    @MainActor
+    private static func openForSession(_ url: URL,
+                                       host: NSWindow?,
+                                       duplicate: Bool) async -> Result<Document, Error> {
+        await withCheckedContinuation { continuation in
+            if duplicate {
+                DocumentOpenCoordinator.openDuplicate(url, host: host) {
+                    continuation.resume(returning: $0)
+                }
+            } else {
+                DocumentOpenCoordinator.open(url, host: host) {
+                    continuation.resume(returning: $0)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private static func restoreOutcome(_ session: TabSession,
+                                       store: SessionStore) async -> SessionRestoreOutcome {
+        await withCheckedContinuation { continuation in
+            SessionLaunchRestore.restore(session: session, store: store) {
+                continuation.resume(returning: $0)
+            }
+        }
+    }
+
+    @MainActor
+    private static func restoreOnLaunchOutcome(launchFileCount: Int,
+                                               existingDocumentCount: Int,
+                                               store: SessionStore) async -> SessionRestoreOutcome {
+        await withCheckedContinuation { continuation in
+            SessionLaunchRestore.restoreOnLaunch(launchFileCount: launchFileCount,
+                                                existingDocumentCount: existingDocumentCount,
+                                                store: store) {
+                continuation.resume(returning: $0)
+            }
+        }
+    }
+
+    private static func sessionOutcomeName(_ outcome: SessionRestoreOutcome) -> String {
+        switch outcome {
+        case .skippedLaunchArguments: return "skippedLaunchArguments"
+        case .skippedExistingDocuments: return "skippedExistingDocuments"
+        case .noSavedSession: return "noSavedSession"
+        case .noExistingFiles: return "noExistingFiles"
+        case .restored(let count): return "restored(\(count))"
+        }
+    }
+
+    /// The tab group with the most windows, in AppKit tab order.
+    @MainActor
+    private static func sessionGroupWindows() -> [NSWindow] {
+        var best: [NSWindow] = []
+        var seen = Set<ObjectIdentifier>()
+        for window in NSApp.windows where window.windowController is DocumentWindowController {
+            if let group = window.tabGroup {
+                let identifier = ObjectIdentifier(group)
+                guard seen.insert(identifier).inserted else { continue }
+                if group.windows.count > best.count {
+                    best = group.windows
+                }
+            } else if window.isVisible, best.isEmpty {
+                best = [window]
+            }
+        }
+        return best
+    }
+
+    @MainActor
+    private static func sessionReport(_ session: TabSession?, group: NSWindowTabGroup) -> [String: Any] {
+        [
+            "paths": session?.paths ?? [],
+            "activeIndex": session?.activeIndex ?? -1,
+            "titles": group.windows.map { $0.title },
+            "windowCount": group.windows.count,
+            "selectedTitle": group.selectedWindow?.title ?? "",
+        ]
     }
 
     /// Closes documents that NSDocumentController restored from a previous
